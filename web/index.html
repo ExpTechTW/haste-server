@@ -9,8 +9,20 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
+    <!--
+      Everything between these markers is rewritten per request: a paste page
+      gets its own title and description so a shared link says what is behind
+      it. The markers are what the server splits on; served straight from disk
+      (vite dev, say) they are inert comments and the defaults below apply.
+    -->
+    <!--head:start-->
     <title>haste</title>
     <meta name="description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
+    <meta property="og:title" content="haste" />
+    <meta property="og:description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
+    <meta name="twitter:title" content="haste" />
+    <meta name="twitter:description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
+    <!--head:end-->
     <meta name="application-name" content="haste" />
     <meta name="author" content="ExpTech Studio" />
 
@@ -34,18 +46,23 @@
     <!-- Link previews, for the chat windows share links actually get pasted into. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="ExpTech Studio" />
-    <meta property="og:title" content="haste" />
-    <meta property="og:description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
-    <meta property="og:image" content="/ExpTech.jpg" />
-    <meta property="og:image:width" content="256" />
-    <meta property="og:image:height" content="256" />
+    <!--
+      The product mark, rasterised from favicon.svg at a size the platforms will
+      actually use: X wants at least 144x144 for a summary card and Facebook
+      ignores anything under 200x200, so pointing this at the 32px icon would
+      leave previews with no image at all.
+    -->
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="haste" />
     <meta property="og:locale" content="zh_TW" />
 
     <!-- summary rather than summary_large_image: the logo is square. -->
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="haste" />
-    <meta name="twitter:description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
-    <meta name="twitter:image" content="/ExpTech.jpg" />
+    <meta name="twitter:image" content="/og-image.png" />
+    <meta name="twitter:image:alt" content="haste" />
 
     <!--
       The SVG carries width and height as well as a viewBox: without an
