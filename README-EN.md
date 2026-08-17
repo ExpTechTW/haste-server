@@ -7,6 +7,8 @@ endpoints, and the React frontend all embedded.
 
 - **Short hash-style codes that never collide** — `k7Qm2Xp9`, not `1`, `2`, `3`.
 - **Write-once.** There is no edit or delete path, and the database enforces it.
+- **A byte cap, not a promise.** Storage is bounded on every write; nothing
+  advertises a lifetime the server cannot honour.
 - **Line links** — `#L17-L25`, addressed and shared the way GitHub does it.
 - **Heavy compression with a built-in dictionary.** A 300-byte log excerpt
   stores in ~19 bytes.
@@ -92,8 +94,7 @@ compressor achieved:
   "bytes": 231,
   "stored": 162,
   "ratio": 1.43,
-  "createdAt": "2026-08-18T16:19:25Z",
-  "expiresAt": "2026-09-17T16:19:25Z"
+  "createdAt": "2026-08-18T16:19:25Z"
 }
 ```
 
@@ -104,7 +105,7 @@ compressor achieved:
 | `GET`  | `/raw/{key}`        | Read as `text/plain`.                       |
 | `GET`  | `/download/{key}`   | Download as `{key}.{ext}` for its language. |
 | `GET`  | `/api/config`       | Limits the server enforces.                 |
-| `GET`  | `/api/stats`        | Live paste count and corpus ratio.          |
+| `GET`  | `/api/stats`        | Live count, corpus ratio, and cap usage.    |
 | `GET`  | `/healthz`          | Liveness.                                   |
 | `POST` | `/documents`        | Original haste-server protocol.             |
 | `GET`  | `/documents/{key}`  | Original haste-server protocol.             |
@@ -114,7 +115,7 @@ keep working unchanged.
 
 Errors come back as `{"error": "code", "message": "..."}` with a matching
 status: `400` empty or malformed, `413` over the limit, `429` rate limited,
-`404` unknown or expired.
+`503` write queue full, `404` unknown or already evicted.
 
 ## Configuration
 
@@ -126,9 +127,13 @@ list). Real environment variables override the file.
 | `HASTE_ADDR`             | `:8080`          | Listen address.                              |
 | `HASTE_MAX_CHARS`        | `4000`           | Unicode code points, not bytes.              |
 | `HASTE_CODE_MIN_LEN`     | `8`              | Shortest share code, 1–10 base62 characters. |
-| `HASTE_RETENTION`        | `30d`            | Accepts `d` and `w`; `0` keeps forever.      |
-| `HASTE_CLEANUP_INTERVAL` | `1h`             | Sweep cadence for expired pastes.            |
+| `HASTE_MAX_BYTES`        | `1GiB`           | Hard cap; evicts LRU on write. `0` = none.   |
+| `HASTE_TTL_ACCESS`       | off              | Drop pastes unread for this long.            |
+| `HASTE_TTL_CREATE`       | off              | Drop pastes older than this.                 |
+| `HASTE_CLEANUP_INTERVAL` | `1h`             | Sweep cadence for the TTLs.                  |
 | `HASTE_ZSTD_LEVEL`       | `19`             | 1–22.                                        |
+| `HASTE_WRITE_CONCURRENCY`| cores            | Simultaneous writes; excess queues.          |
+| `HASTE_WRITE_QUEUE`      | `512`            | Waiting writes before shedding with 503.     |
 | `HASTE_SQLITE_CACHE_MB`  | `48`             | Page cache **per connection**.               |
 | `HASTE_READ_POOL`        | `min(NumCPU, 8)` | Read connections; the writer is always 1.    |
 | `HASTE_RATE_RPS`         | `1`              | Creations per IP per second; `0` disables.   |
@@ -176,7 +181,7 @@ in either direction.
 A paste is write-once. There is no update or delete endpoint, and a
 `BEFORE UPDATE` trigger aborts any write that reaches the table anyway — so no
 future code path, migration, or `sqlite3` session can quietly rewrite a code
-that has already been shared. Deletion happens only through expiry.
+that has already been shared. Rows are only ever removed, never rewritten.
 
 ### Line links
 
@@ -188,23 +193,92 @@ linkable, with no text of its own to end up on the clipboard.
 Selection lives in the URL fragment and nowhere else, so the link in the address
 bar is always exactly what a reader would receive.
 
+### Log severity
+
+In a log paste, `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR` / `FATAL` are
+coloured by how bad they are.
+
+Shiki's log grammar does tag them as `log.error`, `log.warning` and so on, but
+the GitHub themes carry no rules for those scopes, so every level falls through
+to whatever generic scope it piggybacks on — and the result is backwards. `WARN`
+inherits `markup.deleted` and comes out red, while `ERROR` inherits
+`string.regexp` and comes out blue: calmer than the warning above it, and in the
+light theme nearly the same colour as ordinary text. Rules for those scopes are
+added from GitHub's own Primer palette, putting the levels back in the order a
+reader expects.
+
+### Retention
+
+Retention is a budget rather than a promise, which is why nothing in the UI or
+the API advertises a lifetime.
+
+`HASTE_MAX_BYTES` is the only hard guarantee. It is checked inside the same
+transaction as every insert, evicting least-recently-**read** pastes to make
+room, so the database cannot outgrow its allowance no matter how fast pastes
+arrive — an hourly sweep alone would let a burst overshoot for an hour. Two
+optional TTLs trim further, one on last access and one on creation; both are off
+by default, and either can be left unset to disable that rule entirely. The
+sweep applies them in priority order: cap, then access age, then creation age.
+
+Tracking last access means writing on reads, which would funnel every read
+through the single writer. Instead reads queue their timestamps in memory and a
+flush writes them back once a minute in one transaction. Losing a flush costs
+LRU accuracy, never data. The immutability trigger names the content columns
+explicitly so `accessed_at` remains writable while everything a reader can
+observe stays frozen.
+
+Sizing it is a question of what people paste. Measured on full 4000-character
+pastes, worst case per row:
+
+| Content                   | Raw    | Stored | On disk | 1 GiB holds |
+| ------------------------- | ------ | ------ | ------- | ----------- |
+| Go source                 | 4000 B | 250 B  | 360 B   | 3.0M        |
+| Structured / JSON logs    | 4000 B | ~325 B | 442 B   | 2.4M        |
+| English prose             | 4000 B | 1048 B | 1434 B  | 749k        |
+| CJK prose                 | 12 KB  | 3907 B | 4162 B  | 258k        |
+| Incompressible CJK        | 12 KB  | 8734 B | 8937 B  | 120k        |
+
 ### Compression
 
-Pastes are a few kilobytes at most, which is exactly where plain zstd struggles:
-most of the input is spent teaching the compressor about the data before it can
-encode anything cheaply. A prebuilt dictionary of common source and log
-fragments ([dict/v1.txt](internal/compress/dict/v1.txt)) supplies that model up
-front.
+Pastes are a few kilobytes at most, which is exactly where general-purpose
+compressors struggle: most of the input is spent teaching the compressor about
+the data before it can encode anything cheaply. A prebuilt dictionary of common
+source and log fragments ([dict/v1.txt](internal/compress/dict/v1.txt)) supplies
+that model up front. Each paste is compressed with and without it and the
+smaller frame wins, with the codec recorded per row so the dictionary can be
+revised later without invalidating anything already stored.
 
-Each paste is compressed both ways and the smaller frame wins, with the codec
-recorded per row so the dictionary can be revised later without invalidating
-anything already stored. Measured on this build:
+The choice of codec and level is measured, not assumed. Across 160 full-size
+pastes of logs, code, prose and incompressible data:
 
-| Input                     | Raw   | Stored | Ratio |
-| ------------------------- | ----- | ------ | ----- |
-| Three-line structured log | 301 B | 19 B   | 15.8× |
-| One JSON log line         | 111 B | 20 B   | 5.6×  |
-| Small Go program          | 66 B  | 45 B   | 1.5×  |
+| Codec                   | Dict | B/paste | Encode | Decode |
+| ----------------------- | ---- | ------- | ------ | ------ |
+| **zstd -19 + dict**     | yes  | **760** | 345 µs | 4 µs   |
+| brotli q11              |      | 766     | 4.1 ms | 14 µs  |
+| zstd -19                |      | 799     | 576 µs | 4 µs   |
+| zstd -4 + dict          | yes  | 811     | 15 µs  | 4 µs   |
+| deflate -9 + dict       | yes  | 841     | 99 µs  | 14 µs  |
+| gzip -9                 |      | 916     | 82 µs  | 17 µs  |
+| xz (LZMA2)              |      | 954     | 577 µs | 211 µs |
+| bzip2 -9                |      | 965     | 267 µs | 61 µs  |
+
+bzip2 and xz coming last is not a surprise once the input size is taken into
+account: block sorting and a large LZMA window both need far more than four
+kilobytes before they repay their own overhead. Levels 20-22 produce byte-for-
+byte the same output as 19, so there is nothing above the default to reach for.
+
+Keeping the smaller of the two frames is worth about 1% of total storage, and
+the two are independent, so they are encoded on separate cores. The dictionary
+gives its encoder a head start and finishes in roughly half the time of the
+plain one, so overlapping them returns the slower of the two rather than their
+sum: identical bytes, and a single write went from 967 µs to 661 µs.
+
+The remaining lever is the dictionary rather than the algorithm. A dictionary
+*trained* on pastes, rather than hand-written, measured 705 B/paste on held-out
+data — another 7%, with nothing to gain past about 16 KB of dictionary. That
+figure comes from synthetic samples drawn from the same generators as the
+evaluation set, so treat it as an upper bound until it is repeated on real
+traffic.
 
 ### Storage
 
@@ -215,8 +289,16 @@ which removes the "database is locked" failure mode that comes from letting one
 shared pool interleave both.
 
 Each connection gets `HASTE_SQLITE_CACHE_MB` of page cache (48 MiB by default),
-plus a shared 256 MiB mmap window. Expired rows are swept hourly; a sweep that
-deletes anything also checkpoints the WAL so the space actually comes back.
+plus a shared 256 MiB mmap window. A sweep that deletes anything also
+checkpoints the WAL, so the space actually comes back.
+
+Writes need admission control, but not for the reason it first appears. SQLite
+is already a queue — `SetMaxOpenConns(1)` serialises transactions FIFO — and an
+insert costs about 100 µs. Compression is the expensive half, and it runs before
+the transaction with no bound of its own. Measured at 512 concurrent writers,
+letting that run unbounded gave a p99 of 296 ms and a worst case of 523 ms;
+bounding it to one write per core, with a queue that sheds to `503` once full,
+gave a p99 of 111 ms and a worst case of 117 ms at the same throughput.
 
 ### The editor
 
@@ -238,9 +320,19 @@ make test
 The Go suite covers the invariants that matter: code uniqueness across tier
 boundaries, that each tier is a true permutation, that codes honour the minimum
 length and leak no ordering, the immutability trigger, the reader pool rejecting
-writes, pragmas actually landing on both pools, expiry and purge, concurrent
-creates receiving distinct codes, download filenames per language, and the full
-HTTP surface including limits and the raw endpoint's hardening headers.
+writes, pragmas actually landing on both pools, the byte cap holding on every
+single write, eviction removing the least recently *read* paste rather than
+merely the oldest, both TTLs including the fact that they are off by default,
+reads not writing through until flushed, the write queue shedding when full,
+concurrent creates receiving distinct codes, download filenames per language,
+and the full HTTP surface including limits and the raw endpoint's hardening
+headers.
+
+Two suites report rather than assert, because they measure the machine they run
+on: `TestStorageFootprint` prints what a full-size paste costs on disk for each
+kind of content, and `TestLevelTradeoff` prints size and time for every zstd
+level. The conclusions they support are pinned by ordinary assertions next to
+them.
 
 The frontend suite guards language detection, which is a pile of heuristics and
 therefore regresses silently — a rule loosened for one language quietly steals
@@ -253,7 +345,7 @@ selection, including the backwards ranges a shift-click upwards produces.
 ## Layout
 
 ```
-cmd/haste/          entry point, graceful shutdown, expiry sweeper
+cmd/haste/          entry point, graceful shutdown, retention sweeper
 internal/config/    .env loading and validation
 internal/id/        counter to short code (tiers + Feistel permutation)
 internal/compress/  zstd codec and the embedded dictionary

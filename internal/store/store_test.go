@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,24 +14,28 @@ import (
 	"github.com/YuYu1015/haste-server/internal/id"
 )
 
-func newTestStore(t *testing.T, retention time.Duration) *Store {
+func newTestStore(t *testing.T, tweak func(*Options)) *Store {
 	t.Helper()
 
-	codec, err := compress.New(19)
+	codec, err := compress.New(compress.DefaultLevel)
 	if err != nil {
 		t.Fatalf("compress.New: %v", err)
 	}
 	t.Cleanup(codec.Close)
 
-	st, err := Open(context.Background(), Options{
-		Path:      filepath.Join(t.TempDir(), "haste.db"),
-		CacheMB:   8,
-		ReadPool:  4,
-		MaxChars:  4000,
-		Retention: retention,
-		Codec:     codec,
-		IDs:       id.NewGenerator([]byte("test-secret"), id.DefaultMinLen, []string{"api", "raw"}),
-	})
+	opts := Options{
+		Path:     filepath.Join(t.TempDir(), "haste.db"),
+		CacheMB:  8,
+		ReadPool: 4,
+		MaxChars: 4000,
+		Codec:    codec,
+		IDs:      id.NewGenerator([]byte("test-secret"), id.DefaultMinLen, []string{"api", "raw"}),
+	}
+	if tweak != nil {
+		tweak(&opts)
+	}
+
+	st, err := Open(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -39,7 +44,7 @@ func newTestStore(t *testing.T, retention time.Duration) *Store {
 }
 
 func TestCreateAndGetRoundTrip(t *testing.T) {
-	st := newTestStore(t, 30*24*time.Hour)
+	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	content := "package main\n\nfunc main() {\n\tprintln(\"héllo, 世界\")\n}\n"
@@ -65,15 +70,12 @@ func TestCreateAndGetRoundTrip(t *testing.T) {
 	if want := len([]rune(content)); got.Chars != want {
 		t.Errorf("Chars = %d, want %d", got.Chars, want)
 	}
-	if got.ExpiresAt.IsZero() {
-		t.Error("ExpiresAt should be set when retention is configured")
-	}
 }
 
 // Codes must read as hashes from the very first paste, not as a counter that
 // happens to start small.
 func TestCodesAreMinimumLengthAndUnordered(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	var codes []string
@@ -88,7 +90,6 @@ func TestCodesAreMinimumLengthAndUnordered(t *testing.T) {
 		codes = append(codes, p.Code)
 	}
 
-	// Sequential codes would make the address bar a directory of other pastes.
 	for i := 1; i < len(codes); i++ {
 		if codes[i-1][:3] == codes[i][:3] {
 			t.Errorf("consecutive codes %q and %q share a prefix", codes[i-1], codes[i])
@@ -97,7 +98,7 @@ func TestCodesAreMinimumLengthAndUnordered(t *testing.T) {
 }
 
 func TestLimits(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	if _, err := st.Create(ctx, "", ""); !errors.Is(err, ErrEmpty) {
@@ -113,7 +114,7 @@ func TestLimits(t *testing.T) {
 }
 
 func TestGetUnknownCode(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	for _, code := range []string{"zzzz", "", "../../etc/passwd", "not a code"} {
@@ -124,8 +125,8 @@ func TestGetUnknownCode(t *testing.T) {
 }
 
 // "Locked" has to mean locked in the database, not merely unexposed by the API.
-func TestPastesAreImmutable(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+func TestPasteContentIsImmutable(t *testing.T) {
+	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	p, err := st.Create(ctx, "original", "")
@@ -133,31 +134,67 @@ func TestPastesAreImmutable(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = st.w.ExecContext(ctx, `UPDATE pastes SET body = ? WHERE code = ?`, []byte("tampered"), p.Code)
-	if err == nil {
-		t.Fatal("UPDATE on pastes succeeded; the immutability trigger is not firing")
+	// Values match each column's declared type, so it is the trigger that
+	// rejects the write rather than STRICT type checking getting there first.
+	columns := []struct {
+		name  string
+		value any
+	}{
+		{"seq", int64(999)},
+		{"code", "tampered"},
+		{"body", []byte("tampered")},
+		{"codec", int64(1)},
+		{"bytes", int64(1)},
+		{"chars", int64(1)},
+		{"raw_bytes", int64(1)},
+		{"language", "tampered"},
+		{"created_at", int64(0)},
 	}
-	if !strings.Contains(err.Error(), "immutable") {
-		t.Errorf("unexpected error from UPDATE: %v", err)
+
+	for _, c := range columns {
+		_, err := st.w.ExecContext(ctx,
+			fmt.Sprintf(`UPDATE pastes SET %s = ? WHERE code = ?`, c.name), c.value, p.Code)
+		if err == nil {
+			t.Errorf("UPDATE of %s succeeded; the immutability trigger is not covering it", c.name)
+			continue
+		}
+		if !strings.Contains(err.Error(), "immutable") {
+			t.Errorf("unexpected error updating %s: %v", c.name, err)
+		}
 	}
 
 	if _, body, err := st.Get(ctx, p.Code); err != nil || body != "original" {
-		t.Errorf("after blocked UPDATE: body = %q, err = %v", body, err)
+		t.Errorf("after blocked updates: body = %q, err = %v", body, err)
+	}
+}
+
+// accessed_at is bookkeeping rather than content, and LRU eviction needs it to
+// move, so it is the one column the trigger deliberately leaves alone.
+func TestAccessTimeRemainsWritable(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	p, err := st.Create(ctx, "content", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := st.w.ExecContext(ctx,
+		`UPDATE pastes SET accessed_at = ? WHERE seq = ?`, time.Now().Unix()+60, p.Seq); err != nil {
+		t.Errorf("accessed_at must stay writable: %v", err)
 	}
 }
 
 // The reader pool must reject writes even if a future query is written wrong.
 func TestReadPoolIsQueryOnly(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+	st := newTestStore(t, nil)
 
-	_, err := st.r.ExecContext(context.Background(), `DELETE FROM pastes`)
-	if err == nil {
+	if _, err := st.r.ExecContext(context.Background(), `DELETE FROM pastes`); err == nil {
 		t.Fatal("write through the read pool succeeded; query_only is not applied")
 	}
 }
 
 func TestSQLiteCacheIsApplied(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+	st := newTestStore(t, nil)
 
 	for name, db := range map[string]*sql.DB{"writer": st.w, "reader": st.r} {
 		var pages int
@@ -179,63 +216,223 @@ func TestSQLiteCacheIsApplied(t *testing.T) {
 	}
 }
 
-func TestExpiredPastesAreHiddenThenPurged(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+// The cap is the one hard guarantee, so it has to hold continuously rather than
+// only at whatever moment the sweeper happens to run.
+func TestSpaceCapHoldsOnEveryWrite(t *testing.T) {
+	const cap = 64 << 10
+	st := newTestStore(t, func(o *Options) { o.MaxBytes = cap })
 	ctx := context.Background()
 
-	live, err := st.Create(ctx, "still here", "")
-	if err != nil {
-		t.Fatalf("Create: %v", err)
+	for i := 0; i < 400; i++ {
+		if _, err := st.Create(ctx, fmt.Sprintf("paste number %d %s", i, strings.Repeat("x", 900)), ""); err != nil {
+			t.Fatalf("Create #%d: %v", i, err)
+		}
+		stored := storedBytesNow(t, st)
+		if stored > cap {
+			t.Fatalf("after %d pastes the store holds %d bytes, over the %d cap", i+1, stored, cap)
+		}
 	}
 
-	// Insert a row that expired an hour ago. Writing it directly beats sleeping
-	// through a real retention window, and UPDATE is blocked by design.
-	body, codec := st.opts.Codec.Compress([]byte("gone"))
-	past := time.Now().Add(-time.Hour).Unix()
-	if _, err := st.w.ExecContext(ctx,
-		`INSERT INTO pastes (seq, code, body, codec, chars, raw_bytes, language, created_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, '', ?, ?)`,
-		999999, "expired", body, codec, 4, 4, past, past); err != nil {
-		t.Fatalf("seed expired row: %v", err)
+	// The counter must agree with the rows it claims to describe.
+	var actual int64
+	if err := st.r.QueryRowContext(ctx, `SELECT COALESCE(SUM(bytes), 0) FROM pastes`).Scan(&actual); err != nil {
+		t.Fatal(err)
 	}
-
-	if _, _, err := st.Get(ctx, "expired"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("expired paste is still readable: %v", err)
-	}
-
-	n, err := st.PurgeExpired(ctx)
-	if err != nil {
-		t.Fatalf("PurgeExpired: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("PurgeExpired deleted %d rows, want 1", n)
-	}
-	if _, _, err := st.Get(ctx, live.Code); err != nil {
-		t.Errorf("purge removed a live paste: %v", err)
+	if got := storedBytesNow(t, st); got != actual {
+		t.Errorf("stored_bytes counter = %d, table sum = %d", got, actual)
 	}
 }
 
-func TestRetentionZeroKeepsForever(t *testing.T) {
-	st := newTestStore(t, 0)
+// Eviction has to remove the least recently *read* paste, not simply the oldest
+// one, or a popular paste disappears while a forgotten one survives.
+func TestEvictionRemovesLeastRecentlyUsed(t *testing.T) {
+	st := newTestStore(t, func(o *Options) { o.MaxBytes = 1 << 20 })
+	ctx := context.Background()
+
+	filler := strings.Repeat("unique-filler-content ", 40)
+
+	oldest, err := st.Create(ctx, "oldest paste "+filler, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	middle, err := st.Create(ctx, "middle paste "+filler, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the oldest so it becomes the most recently used, then persist that.
+	if _, _, err := st.Get(ctx, oldest.Code); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.FlushAccess(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Access times have one-second resolution, so make the ordering explicit.
+	if _, err := st.w.ExecContext(ctx,
+		`UPDATE pastes SET accessed_at = ? WHERE seq = ?`, time.Now().Add(time.Hour).Unix(), oldest.Seq); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := st.w.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, _, err := evict(ctx, tx, 1); err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := st.Get(ctx, middle.Code); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the untouched paste should have been evicted first, got %v", err)
+	}
+	if _, _, err := st.Get(ctx, oldest.Code); err != nil {
+		t.Errorf("the recently read paste should have survived: %v", err)
+	}
+}
+
+func TestRejectsPasteLargerThanTheWholeCap(t *testing.T) {
+	st := newTestStore(t, func(o *Options) { o.MaxBytes = 64 })
+	ctx := context.Background()
+
+	// Random-ish text so compression cannot shrink it under the cap.
+	var b strings.Builder
+	for i := 0; i < 2000; i++ {
+		fmt.Fprintf(&b, "%d%c", i*7919, rune('a'+i%26))
+	}
+	content := string([]rune(b.String())[:4000])
+
+	if _, err := st.Create(ctx, content, ""); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("got %v, want ErrNoRoom", err)
+	}
+}
+
+func TestTTLsAreDisabledByDefault(t *testing.T) {
+	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	p, err := st.Create(ctx, "permanent", "")
 	if err != nil {
-		t.Fatalf("Create: %v", err)
+		t.Fatal(err)
 	}
-	if !p.ExpiresAt.IsZero() {
-		t.Errorf("ExpiresAt = %v, want zero when retention is disabled", p.ExpiresAt)
+	// Backdate the row far beyond any plausible TTL.
+	backdate(t, st, p.Seq, time.Now().Add(-10*365*24*time.Hour))
+
+	result, err := st.Sweep(ctx)
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
 	}
-	if n, err := st.PurgeExpired(ctx); err != nil || n != 0 {
-		t.Errorf("PurgeExpired = %d, %v; want 0, nil", n, err)
+	if result.Removed() != 0 {
+		t.Errorf("sweep removed %d rows with both TTLs off", result.Removed())
 	}
 	if _, _, err := st.Get(ctx, p.Code); err != nil {
-		t.Errorf("Get after purge: %v", err)
+		t.Errorf("Get after sweep: %v", err)
+	}
+}
+
+func TestAccessTTL(t *testing.T) {
+	st := newTestStore(t, func(o *Options) { o.TTLAccess = time.Hour })
+	ctx := context.Background()
+
+	stale, err := st.Create(ctx, "stale", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := st.Create(ctx, "fresh", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backdate(t, st, stale.Seq, time.Now().Add(-2*time.Hour))
+
+	// Hidden from reads before the sweeper has even run.
+	if _, _, err := st.Get(ctx, stale.Code); !errors.Is(err, ErrNotFound) {
+		t.Errorf("paste past the access TTL is still readable: %v", err)
+	}
+
+	result, err := st.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AccessExpired != 1 {
+		t.Errorf("AccessExpired = %d, want 1", result.AccessExpired)
+	}
+	if _, _, err := st.Get(ctx, fresh.Code); err != nil {
+		t.Errorf("the fresh paste was removed: %v", err)
+	}
+}
+
+func TestCreateTTL(t *testing.T) {
+	st := newTestStore(t, func(o *Options) { o.TTLCreate = time.Hour })
+	ctx := context.Background()
+
+	old, err := st.Create(ctx, "old", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only created_at moves: a paste read a second ago must still expire on age.
+	if _, err := st.w.ExecContext(ctx,
+		`UPDATE pastes SET accessed_at = ? WHERE seq = ?`, time.Now().Unix(), old.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.w.ExecContext(ctx,
+		`DELETE FROM pastes WHERE seq = ?`, old.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.w.ExecContext(ctx,
+		`INSERT INTO pastes (seq, code, body, codec, bytes, chars, raw_bytes, language, created_at, accessed_at)
+		 VALUES (?, ?, ?, 0, 3, 3, 3, '', ?, ?)`,
+		old.Seq, old.Code, []byte("abc"), time.Now().Add(-2*time.Hour).Unix(), time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := st.Get(ctx, old.Code); !errors.Is(err, ErrNotFound) {
+		t.Errorf("paste past the creation TTL is still readable: %v", err)
+	}
+	result, err := st.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CreateExpired != 1 {
+		t.Errorf("CreateExpired = %d, want 1", result.CreateExpired)
+	}
+}
+
+// Reads must not write through, or every read would queue behind the single
+// writer and the read/write split would buy nothing.
+func TestReadsDoNotWriteUntilFlushed(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	p, err := st.Create(ctx, "content", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := accessedAt(t, st, p.Seq)
+
+	backdate(t, st, p.Seq, time.Now().Add(-time.Hour))
+	if _, _, err := st.Get(ctx, p.Code); err != nil {
+		t.Fatal(err)
+	}
+	if got := accessedAt(t, st, p.Seq); got >= before {
+		t.Error("the read updated accessed_at synchronously; it should have been queued")
+	}
+
+	n, err := st.FlushAccess(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("FlushAccess reported %d rows, want 1", n)
+	}
+	if got := accessedAt(t, st, p.Seq); got < before {
+		t.Errorf("accessed_at = %d after flush, want >= %d", got, before)
 	}
 }
 
 func TestConcurrentCreatesGetDistinctCodes(t *testing.T) {
-	st := newTestStore(t, time.Hour)
+	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	const n = 200
@@ -269,7 +466,7 @@ func TestConcurrentCreatesGetDistinctCodes(t *testing.T) {
 // The dictionary exists to beat plain zstd on short inputs; if it ever stops
 // doing that, the extra codec path is not earning its complexity.
 func TestDictionaryBeatsPlainZstdOnShortPastes(t *testing.T) {
-	codec, err := compress.New(19)
+	codec, err := compress.New(compress.DefaultLevel)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,4 +485,31 @@ func TestDictionaryBeatsPlainZstdOnShortPastes(t *testing.T) {
 		t.Error("dictionary round-trip mismatch")
 	}
 	t.Logf("raw=%d stored=%d (%.1fx)", len(src), len(blob), float64(len(src))/float64(len(blob)))
+}
+
+func storedBytesNow(t *testing.T, st *Store) int64 {
+	t.Helper()
+	var n int64
+	if err := st.r.QueryRow(`SELECT value FROM counters WHERE name = 'stored_bytes'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func accessedAt(t *testing.T, st *Store, seq uint64) int64 {
+	t.Helper()
+	var n int64
+	if err := st.r.QueryRow(`SELECT accessed_at FROM pastes WHERE seq = ?`, seq).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// backdate moves both timestamps into the past, standing in for a paste that
+// has simply been sitting there.
+func backdate(t *testing.T, st *Store, seq uint64, when time.Time) {
+	t.Helper()
+	if _, err := st.w.Exec(`UPDATE pastes SET accessed_at = ? WHERE seq = ?`, when.Unix(), seq); err != nil {
+		t.Fatal(err)
+	}
 }

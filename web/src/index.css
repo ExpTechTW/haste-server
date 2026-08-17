@@ -130,11 +130,24 @@
   }
 
   .shiki {
-    @apply px-4 font-mono text-[13px] leading-[1.65] sm:px-6;
+    /*
+     * The number lives in the left padding, not in the text flow. That is what
+     * lets a wrapped line's continuation line up under the line's first
+     * character instead of under its number — and it is the only arrangement
+     * the editor's textarea can match, because a textarea has no way to indent
+     * one line differently from the next.
+     */
+    --code-gutter: calc(3ch + 0.75rem);
+    @apply font-mono text-[13px] leading-[1.65];
+    padding: 0 1rem 0 calc(1rem + var(--code-gutter));
     counter-reset: shiki-line;
-    /* Width of the number plus its margin, shared by the counter and the
-       invisible link sitting over it. */
-    --code-gutter: calc(3ch + 1rem);
+  }
+
+  @media (min-width: 640px) {
+    .shiki {
+      padding-right: 1.5rem;
+      padding-left: calc(1.5rem + var(--code-gutter));
+    }
   }
 
   /*
@@ -151,11 +164,13 @@
     @apply relative min-h-[1.65em] pr-4;
   }
 
-  /* Gutter drawn with a counter so the numbers can never be copied with the code. */
+  /* Drawn with a counter so the numbers can never be copied with the code. */
   .shiki .line::before {
     counter-increment: shiki-line;
     content: counter(shiki-line);
-    @apply mr-4 inline-block w-[3ch] shrink-0 select-none pr-2 text-right text-muted-foreground/45 tabular-nums;
+    position: absolute;
+    left: calc(-1 * var(--code-gutter));
+    @apply w-[3ch] select-none text-right text-muted-foreground/45 tabular-nums;
   }
 
   .shiki .line:hover::before {
@@ -170,7 +185,7 @@
   .shiki .line-link {
     position: absolute;
     inset-block: 0;
-    left: 0;
+    left: calc(-1 * var(--code-gutter));
     width: var(--code-gutter);
     cursor: pointer;
   }
@@ -183,6 +198,9 @@
      blanket transparent background Shiki's own spans carry. */
   .shiki .line[data-highlighted] {
     background-color: var(--line-highlight) !important;
+    /* The gutter sits in the padding, outside this box; the offset shadow
+       carries the band across it so the row reads as one selection. */
+    box-shadow: calc(-1 * var(--code-gutter)) 0 0 0 var(--line-highlight);
   }
 
   .shiki .line[data-highlighted]::before {
@@ -197,10 +215,14 @@
    */
   .code-metrics,
   .editor-layer .shiki {
+    /* Declared here as well as on .shiki so the textarea can reserve exactly
+       the same room; `ch` resolves against each element's own font, and both
+       are the same 13px mono. */
+    --code-gutter: calc(3ch + 0.75rem);
     font-family: var(--font-mono);
     font-size: 13px;
     line-height: 1.65;
-    padding: 1rem;
+    padding: 1rem 1rem 1rem calc(1rem + var(--code-gutter));
     tab-size: 2;
     letter-spacing: normal;
     white-space: pre-wrap;
@@ -212,16 +234,9 @@
   @media (min-width: 640px) {
     .code-metrics,
     .editor-layer .shiki {
-      padding-inline: 1.5rem;
+      padding-right: 1.5rem;
+      padding-left: calc(1.5rem + var(--code-gutter));
     }
-  }
-
-  /*
-   * No gutter while editing: a wrapped line's continuation cannot line up under
-   * a line number, and the textarea has no way to reproduce that indent.
-   */
-  .editor-layer .shiki .line::before {
-    content: none;
   }
 
   /* Any extra inline padding here would wrap the layer earlier than the

@@ -1,18 +1,31 @@
 import * as React from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
-import { CopyIcon, DownloadIcon, FileTextIcon, LinkIcon, PlusIcon } from "lucide-react"
+import {
+  CopyIcon,
+  DownloadIcon,
+  EllipsisIcon,
+  FileTextIcon,
+  LinkIcon,
+  PlusIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { CodeView } from "@/components/code-view"
 import { HeaderBar, Kbd, Shell, StatusBar } from "@/components/shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ApiError, fetchPaste, type Paste } from "@/lib/api"
 import { copyText } from "@/lib/clipboard"
 import { PLAIN, languageLabel } from "@/lib/languages"
 import { clampRange, formatLineHash, parseLineHash, selectLine } from "@/lib/lines"
-import { formatExpiry } from "@/lib/utils"
 
 export function PastePage() {
   const { code = "" } = useParams()
@@ -122,35 +135,49 @@ export function PastePage() {
     return <NotFound code={code} message={error.message} />
   }
 
-  const expiry = paste ? formatExpiry(paste.expiresAt) : null
-
   return (
     <Shell>
       <HeaderBar>
         <IconAction label="Copy link" shortcut="C" onClick={() => void copyLink()}>
           <LinkIcon />
         </IconAction>
-        <IconAction
-          label="Copy content"
-          onClick={() => void copyContent()}
-          disabled={!paste?.content}
-        >
-          <CopyIcon />
-        </IconAction>
-        <IconAction label="View raw" shortcut="R" asLink href={paste?.rawUrl}>
-          <FileTextIcon />
-        </IconAction>
-        <IconAction
-          label={paste ? `Download ${paste.filename}` : "Download"}
-          shortcut="S"
-          asLink
-          href={paste?.downloadUrl}
-        >
-          <DownloadIcon />
-        </IconAction>
-        <IconAction label="New paste" shortcut="N" onClick={() => navigate("/")}>
-          <PlusIcon />
-        </IconAction>
+
+        {/*
+          Sharing the link is the one action worth a permanent slot. The rest
+          stay inline where there is room and collapse into a menu on a phone,
+          whose header also has to hold the brand, the GitHub link and the
+          theme toggle. `contents` lets them rejoin the row without a wrapper
+          box of their own.
+        */}
+        <span className="hidden sm:contents">
+          <IconAction
+            label="Copy content"
+            onClick={() => void copyContent()}
+            disabled={!paste?.content}
+          >
+            <CopyIcon />
+          </IconAction>
+          <IconAction label="View raw" shortcut="R" asLink href={paste?.rawUrl}>
+            <FileTextIcon />
+          </IconAction>
+          <IconAction
+            label={paste ? `Download ${paste.filename}` : "Download"}
+            shortcut="S"
+            asLink
+            href={paste?.downloadUrl}
+          >
+            <DownloadIcon />
+          </IconAction>
+          <IconAction label="New paste" shortcut="N" onClick={() => navigate("/")}>
+            <PlusIcon />
+          </IconAction>
+        </span>
+
+        <MoreActions
+          paste={paste}
+          onCopyContent={() => void copyContent()}
+          onNew={() => navigate("/")}
+        />
       </HeaderBar>
 
       <main className="scrollbar-slim min-h-0 flex-1 overflow-auto bg-surface py-4">
@@ -178,15 +205,61 @@ export function PastePage() {
             <span className="text-xs text-muted-foreground tabular-nums">
               {paste.chars.toLocaleString()} chars
             </span>
-            {expiry && (
-              <span className="ml-auto text-xs text-muted-foreground">{expiry}</span>
-            )}
           </>
         ) : (
           <span className="text-xs text-muted-foreground">Loading…</span>
         )}
       </StatusBar>
     </Shell>
+  )
+}
+
+/** The secondary actions, folded into one button where width is scarce. */
+function MoreActions({
+  paste,
+  onCopyContent,
+  onNew,
+}: {
+  paste: Paste | null
+  onCopyContent: () => void
+  onNew: () => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="More actions" className="sm:hidden">
+          <EllipsisIcon />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuItem onSelect={onCopyContent} disabled={!paste?.content}>
+          <CopyIcon />
+          Copy content
+        </DropdownMenuItem>
+        {paste && (
+          <>
+            {/* Full navigations, not client routes: both are served by the backend. */}
+            <DropdownMenuItem asChild>
+              <a href={paste.rawUrl}>
+                <FileTextIcon />
+                View raw
+              </a>
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <a href={paste.downloadUrl}>
+                <DownloadIcon />
+                Download
+              </a>
+            </DropdownMenuItem>
+          </>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onNew}>
+          <PlusIcon />
+          New paste
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

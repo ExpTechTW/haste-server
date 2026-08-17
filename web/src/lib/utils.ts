@@ -10,19 +10,23 @@ export function modKey(): string {
   return /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘" : "Ctrl+"
 }
 
-/** Renders a future timestamp as a coarse "expires in" phrase. */
-export function formatExpiry(iso: string | null): string | null {
-  if (!iso) return null
-  const ms = new Date(iso).getTime() - Date.now()
-  if (Number.isNaN(ms)) return null
-  if (ms <= 0) return "expired"
 
-  // Rounded, not truncated: a paste created seconds ago under a 30-day policy
-  // should read "30 days", not "29".
-  const days = Math.round(ms / 86_400_000)
-  if (ms >= 86_400_000) return `expires in ${days} day${days === 1 ? "" : "s"}`
-  const hours = Math.round(ms / 3_600_000)
-  if (hours >= 1) return `expires in ${hours} hour${hours === 1 ? "" : "s"}`
-  const minutes = Math.max(1, Math.floor(ms / 60_000))
-  return `expires in ${minutes} min`
+/**
+ * Counts Unicode code points, matching the runes the server counts.
+ *
+ * `Array.from(s).length` gives the same answer but materialises one string per
+ * character, which is thousands of short-lived allocations on every keystroke.
+ * A UTF-16 length is already the code-point count unless the text contains a
+ * surrogate pair, so this only has to subtract those.
+ */
+export function countCodePoints(s: string): number {
+  let count = s.length
+  for (let i = 0; i < s.length - 1; i++) {
+    // A high surrogate followed by a low one is a single code point.
+    if ((s.charCodeAt(i) & 0xfc00) === 0xd800 && (s.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+      count--
+      i++
+    }
+  }
+  return count
 }

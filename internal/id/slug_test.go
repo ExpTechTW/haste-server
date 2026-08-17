@@ -70,10 +70,10 @@ func TestMinimumLengthIsHonoured(t *testing.T) {
 	}
 
 	// The tier above only opens once the minimum-length tier is full.
-	if code, err := g.Code(size[DefaultMinLen]); err != nil || len(code) != DefaultMinLen {
+	if code, err := g.Code(tiers[DefaultMinLen].size); err != nil || len(code) != DefaultMinLen {
 		t.Errorf("last code of the first tier = %q (%v), want %d chars", code, err, DefaultMinLen)
 	}
-	if code, err := g.Code(size[DefaultMinLen] + 1); err != nil || len(code) != DefaultMinLen+1 {
+	if code, err := g.Code(tiers[DefaultMinLen].size + 1); err != nil || len(code) != DefaultMinLen+1 {
 		t.Errorf("first code past the tier = %q (%v), want %d chars", code, err, DefaultMinLen+1)
 	}
 }

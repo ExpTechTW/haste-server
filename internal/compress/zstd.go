@@ -60,11 +60,24 @@ func (c *Codec) Close() {
 
 // Compress encodes src both ways and keeps whichever frame came out smaller,
 // returning the bytes and the codec id needed to read them back. The dictionary
-// nearly always wins for short pastes, but a long paste can carry enough of its
-// own context that the dictionary's frame header stops paying for itself.
+// wins for most pastes, but one that carries enough of its own context can beat
+// it, and on this corpus that is worth about 1% of total storage.
+//
+// The two frames are independent, so they run on separate cores. The dictionary
+// gives its encoder a head start and finishes in roughly half the time of the
+// plain one, so overlapping them costs a goroutine and returns the slower of the
+// two rather than their sum — the same bytes for about two thirds of the wait.
 func (c *Codec) Compress(src []byte) (blob []byte, codec int) {
-	plain := gozstd.CompressLevel(nil, src, c.level)
+	var plain []byte
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		plain = gozstd.CompressLevel(nil, src, c.level)
+	}()
+
 	dicted := gozstd.CompressDict(nil, src, c.cdict)
+	<-done
+
 	if len(dicted) < len(plain) {
 		return dicted, CodecZstdDict
 	}
@@ -91,3 +104,31 @@ func (c *Codec) Decompress(blob []byte, codec int, limit int) ([]byte, error) {
 		return nil, fmt.Errorf("compress: unknown codec id %d", codec)
 	}
 }
+
+// DefaultLevel is the compression level the server uses unless configured
+// otherwise.
+//
+// This server is tuned for storage, not for write latency, so the default sits
+// at the top of the useful range. Measured on its own corpus of 4000-character
+// pastes (see level_test.go, and the cross-codec comparison in the README):
+//
+//	zstd -19 + dictionary   760 B/paste   345µs      <- default
+//	brotli q11              766 B/paste   4.1ms
+//	zstd -19, no dictionary 799 B/paste   576µs
+//	zstd -4  + dictionary   811 B/paste    15µs
+//	gzip -9                 916 B/paste    82µs
+//	xz (LZMA2)              954 B/paste   577µs
+//	bzip2 -9                965 B/paste   267µs
+//
+// bzip2 and xz losing is not a surprise once the input size is taken into
+// account: block sorting and a large LZMA window both need far more than four
+// kilobytes before they repay their own overhead. Levels 20-22 produce byte-for-
+// byte the same output as 19 here, so there is nothing above this to reach for.
+//
+// An operator who cares more about write throughput than about bytes can drop
+// this a long way — level 4 costs about 6% more space for a twentieth of the
+// CPU — but that is not the default this server ships.
+const DefaultLevel = 19
+
+// MaxLevel is the highest level zstd accepts.
+const MaxLevel = 22

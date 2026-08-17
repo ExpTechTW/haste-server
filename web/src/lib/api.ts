@@ -12,14 +12,10 @@ export interface Paste {
   stored: number
   ratio: number
   createdAt: string
-  expiresAt: string | null
 }
 
 export interface ServerConfig {
   maxChars: number
-  retentionDays: number
-  retention: string
-  expires: boolean
 }
 
 /** An error the server described in its JSON envelope. */

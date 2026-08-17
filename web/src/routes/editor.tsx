@@ -11,7 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useServerConfig } from "@/hooks/use-server-config"
 import { ApiError, createPaste } from "@/lib/api"
 import { PLAIN, detectLanguage } from "@/lib/languages"
-import { cn, modKey } from "@/lib/utils"
+import { cn, countCodePoints, modKey } from "@/lib/utils"
 
 export function EditorPage() {
   const navigate = useNavigate()
@@ -34,7 +34,7 @@ export function EditorPage() {
   const language = choice === AUTO ? detected : choice
 
   // Code points, matching the runes the server counts.
-  const chars = React.useMemo(() => Array.from(content).length, [content])
+  const chars = React.useMemo(() => countCodePoints(content), [content])
   const overLimit = chars > config.maxChars
   const empty = content.trim().length === 0
 
@@ -92,7 +92,7 @@ export function EditorPage() {
   const readFile = async (file: File) => {
     const text = await file.text()
     setContent(text)
-    if (Array.from(text).length > config.maxChars) {
+    if (countCodePoints(text) > config.maxChars) {
       toast.warning("File is over the limit", {
         description: `Trim it to ${config.maxChars.toLocaleString()} characters before saving.`,
       })
@@ -139,7 +139,7 @@ export function EditorPage() {
       <StatusBar>
         <span
           className={cn(
-            "font-mono text-xs tabular-nums",
+            "shrink-0 font-mono text-xs tabular-nums",
             overLimit ? "font-semibold text-destructive" : "text-muted-foreground",
           )}
           aria-live="polite"
@@ -147,20 +147,15 @@ export function EditorPage() {
           {chars.toLocaleString()} / {config.maxChars.toLocaleString()}
         </span>
 
-        {config.expires && (
-          <span className="hidden text-xs text-muted-foreground sm:inline">
-            kept {formatRetention(config.retentionDays)}
-          </span>
-        )}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           <LanguagePicker value={choice} detected={detected} onChange={setChoice} />
 
           <Tooltip>
             <TooltipTrigger asChild>
               {/* span keeps the tooltip reachable while the button is disabled */}
               <span>
-                <Button size="sm" onClick={() => void save()} disabled={saving || empty || overLimit}>
+                <Button size="sm" className="shrink-0" onClick={() => void save()} disabled={saving || empty || overLimit}>
                   {saving ? (
                     <LoaderCircleIcon className="animate-spin" />
                   ) : (
@@ -186,11 +181,3 @@ export function EditorPage() {
   )
 }
 
-function formatRetention(days: number): string {
-  if (days >= 1) {
-    const whole = Math.round(days)
-    return `${whole} day${whole === 1 ? "" : "s"}`
-  }
-  const hours = Math.max(1, Math.round(days * 24))
-  return `${hours} hour${hours === 1 ? "" : "s"}`
-}

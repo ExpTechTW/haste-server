@@ -54,9 +54,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 		CacheMB:   cfg.SQLiteCacheMB,
 		ReadPool:  cfg.ReadPool,
 		MaxChars:  cfg.MaxChars,
-		Retention: cfg.Retention,
-		Codec:     codec,
-		IDs:       id.NewGenerator(cfg.IDSecret, cfg.CodeMinLen, httpapi.ReservedCodes),
+		MaxBytes:  cfg.MaxBytes,
+		TTLAccess: cfg.TTLAccess,
+		TTLCreate: cfg.TTLCreate,
+
+		WriteConcurrency: cfg.WriteConcurrency,
+		WriteQueue:       cfg.WriteQueue,
+
+		Codec: codec,
+		IDs:   id.NewGenerator(cfg.IDSecret, cfg.CodeMinLen, httpapi.ReservedCodes),
 	})
 	if err != nil {
 		return err
@@ -78,7 +84,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// Sweep once at startup so a server that was down past a retention window
-	// does not serve expired pastes until the first tick.
+	// does not serve stale pastes until the first tick.
 	go sweeper(ctx, st, cfg.CleanupInterval, log)
 
 	errc := make(chan error, 1)
@@ -91,8 +97,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 			"zstd", cfg.ZstdLevel,
 			"cacheMB", cfg.SQLiteCacheMB,
 			"readPool", cfg.ReadPool,
-			"retention", retentionLabel(cfg.Retention),
+			"maxBytes", byteLabel(cfg.MaxBytes),
+			"ttlAccess", ttlLabel(cfg.TTLAccess),
+			"ttlCreate", ttlLabel(cfg.TTLCreate),
 			"cleanupEvery", cfg.CleanupInterval.String(),
+			"writeConcurrency", cfg.WriteConcurrency,
+			"writeQueue", cfg.WriteQueue,
 		)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
@@ -114,38 +124,78 @@ func run(ctx context.Context, log *slog.Logger) error {
 	return nil
 }
 
-// sweeper deletes expired pastes on a fixed interval until the context ends.
+// accessFlushInterval bounds how stale the LRU ordering can get. Access times
+// are batched rather than written per read, so this is the window in which a
+// crash could lose recency information — never data.
+const accessFlushInterval = time.Minute
+
+// sweeper applies the retention rules on a fixed interval until the context
+// ends, flushing access times far more often so eviction ranks rows by their
+// real recency rather than by whenever the last sweep happened to run.
 func sweeper(ctx context.Context, st *store.Store, every time.Duration, log *slog.Logger) {
-	purge := func() {
-		n, err := st.PurgeExpired(ctx)
+	sweep := func() {
+		result, err := st.Sweep(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Error("cleanup failed", "err", err)
 			}
 			return
 		}
-		if n > 0 {
-			log.Info("cleanup", "deleted", n)
+		if result.Removed() > 0 {
+			log.Info("cleanup",
+				"evictedForSpace", result.SpaceEvicted,
+				"expiredByAccess", result.AccessExpired,
+				"expiredByAge", result.CreateExpired,
+				"storedBytes", result.StoredBytes,
+			)
 		}
 	}
 
-	purge()
+	sweep()
 
-	t := time.NewTicker(every)
-	defer t.Stop()
+	sweepTick := time.NewTicker(every)
+	defer sweepTick.Stop()
+
+	flushEvery := accessFlushInterval
+	if every < flushEvery {
+		flushEvery = every
+	}
+	flushTick := time.NewTicker(flushEvery)
+	defer flushTick.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
-			purge()
+		case <-sweepTick.C:
+			sweep()
+		case <-flushTick.C:
+			if _, err := st.FlushAccess(ctx); err != nil && ctx.Err() == nil {
+				log.Error("access flush failed", "err", err)
+			}
 		}
 	}
 }
 
-func retentionLabel(d time.Duration) string {
+func ttlLabel(d time.Duration) string {
 	if d <= 0 {
-		return "forever"
+		return "off"
 	}
 	return d.String()
+}
+
+func byteLabel(n int64) string {
+	if n <= 0 {
+		return "unlimited"
+	}
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%ciB", float64(n)/float64(div), "KMGT"[exp])
 }

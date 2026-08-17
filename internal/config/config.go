@@ -14,19 +14,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YuYu1015/haste-server/internal/compress"
 	"github.com/YuYu1015/haste-server/internal/id"
 
 	"github.com/joho/godotenv"
 )
 
-// zstd's own accepted range. 19 is the "extreme" preset this server defaults to:
-// pastes are capped at a few kilobytes, so even the slowest levels cost
-// microseconds, and every byte saved is a byte never re-read from disk.
+// zstd's own accepted range. The default lives in the compress package, next to
+// the measurements that chose it.
 const (
-	MinZstdLevel     = 1
-	MaxZstdLevel     = 22
-	DefaultZstdLevel = 19
+	MinZstdLevel = 1
+	MaxZstdLevel = 22
 )
+
+// MinMaxBytes is a floor for the space cap. A 4000-character paste of
+// incompressible CJK costs about 9 KB on disk, so a cap below this would evict
+// every paste the moment it was written.
+const MinMaxBytes = 1 << 20
 
 // Config is the fully resolved, validated server configuration.
 type Config struct {
@@ -37,10 +41,22 @@ type Config struct {
 	ReadPool      int // read-only connections; the writer is always exactly 1
 	SQLiteCacheMB int // page cache per connection
 
-	MaxChars        int
-	ZstdLevel       int
-	Retention       time.Duration // 0 = keep forever
+	MaxChars  int
+	ZstdLevel int
+
+	// Retention is a budget, not a promise. MaxBytes is the hard guarantee and
+	// is enforced on every write; the two TTLs are optional extra trimming and
+	// are both disabled by default.
+	MaxBytes        int64         // 0 = unlimited
+	TTLAccess       time.Duration // 0 = never expire on idleness
+	TTLCreate       time.Duration // 0 = never expire on age
 	CleanupInterval time.Duration
+
+	// Admission control for writes. Compressing at zstd-19 costs roughly a
+	// millisecond of CPU per paste and runs before the transaction, so it — not
+	// SQLite — is what unbounded load actually saturates.
+	WriteConcurrency int
+	WriteQueue       int
 
 	CodeMinLen int // shortest share code issued
 	IDSecret   []byte
@@ -64,16 +80,28 @@ func Load() (*Config, error) {
 		ReadPool:      envInt("HASTE_READ_POOL", min(runtime.NumCPU(), 8)),
 		SQLiteCacheMB: envInt("HASTE_SQLITE_CACHE_MB", 48),
 		MaxChars:      envInt("HASTE_MAX_CHARS", 4000),
-		ZstdLevel:     envInt("HASTE_ZSTD_LEVEL", DefaultZstdLevel),
+		ZstdLevel:     envInt("HASTE_ZSTD_LEVEL", compress.DefaultLevel),
 		CodeMinLen:    envInt("HASTE_CODE_MIN_LEN", id.DefaultMinLen),
-		RateRPS:       envFloat("HASTE_RATE_RPS", 1),
-		RateBurst:     envInt("HASTE_RATE_BURST", 20),
-		TrustProxy:    envBool("HASTE_TRUST_PROXY", false),
-		CORSOrigins:   envList("HASTE_CORS_ORIGINS", "*"),
+		// Compression is CPU-bound, so more simultaneous writes than cores buys
+		// context switching rather than throughput.
+		WriteConcurrency: envInt("HASTE_WRITE_CONCURRENCY", runtime.NumCPU()),
+		WriteQueue:       envInt("HASTE_WRITE_QUEUE", 512),
+		RateRPS:          envFloat("HASTE_RATE_RPS", 1),
+		RateBurst:        envInt("HASTE_RATE_BURST", 20),
+		TrustProxy:       envBool("HASTE_TRUST_PROXY", false),
+		CORSOrigins:      envList("HASTE_CORS_ORIGINS", "*"),
 	}
 
 	var err error
-	if cfg.Retention, err = envDur("HASTE_RETENTION", "30d"); err != nil {
+	if cfg.MaxBytes, err = envBytes("HASTE_MAX_BYTES", "1GiB"); err != nil {
+		return nil, err
+	}
+	// Both TTLs default to off: the space cap alone decides what gets removed
+	// unless an operator asks for an age policy as well.
+	if cfg.TTLAccess, err = envDur("HASTE_TTL_ACCESS", "0"); err != nil {
+		return nil, err
+	}
+	if cfg.TTLCreate, err = envDur("HASTE_TTL_CREATE", "0"); err != nil {
 		return nil, err
 	}
 	if cfg.CleanupInterval, err = envDur("HASTE_CLEANUP_INTERVAL", "1h"); err != nil {
@@ -103,10 +131,21 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: HASTE_READ_POOL must be >= 1, got %d", c.ReadPool)
 	case c.CodeMinLen < 1 || c.CodeMinLen > id.MaxLen:
 		return fmt.Errorf("config: HASTE_CODE_MIN_LEN must be 1-%d, got %d", id.MaxLen, c.CodeMinLen)
-	case c.Retention < 0:
-		return fmt.Errorf("config: HASTE_RETENTION must not be negative")
+	case c.MaxBytes < 0:
+		return fmt.Errorf("config: HASTE_MAX_BYTES must not be negative")
+	// A cap below one worst-case paste would evict every write immediately.
+	case c.MaxBytes > 0 && c.MaxBytes < MinMaxBytes:
+		return fmt.Errorf("config: HASTE_MAX_BYTES must be 0 or at least %d bytes, got %d", MinMaxBytes, c.MaxBytes)
+	case c.TTLAccess < 0:
+		return fmt.Errorf("config: HASTE_TTL_ACCESS must not be negative")
+	case c.TTLCreate < 0:
+		return fmt.Errorf("config: HASTE_TTL_CREATE must not be negative")
 	case c.CleanupInterval <= 0:
 		return fmt.Errorf("config: HASTE_CLEANUP_INTERVAL must be > 0")
+	case c.WriteConcurrency < 0:
+		return fmt.Errorf("config: HASTE_WRITE_CONCURRENCY must not be negative")
+	case c.WriteQueue < 0:
+		return fmt.Errorf("config: HASTE_WRITE_QUEUE must not be negative")
 	case c.RateRPS < 0:
 		return fmt.Errorf("config: HASTE_RATE_RPS must not be negative")
 	}
@@ -190,6 +229,60 @@ func envDur(key, def string) (time.Duration, error) {
 		return 0, fmt.Errorf("config: %s: %w", key, err)
 	}
 	return d, nil
+}
+
+func envBytes(key, def string) (int64, error) {
+	raw := envStr(key, def)
+	n, err := ParseBytes(raw)
+	if err != nil {
+		return 0, fmt.Errorf("config: %s: %w", key, err)
+	}
+	return n, nil
+}
+
+// byteUnits are ordered longest-suffix-first so "GiB" is matched before "B".
+var byteUnits = []struct {
+	suffix string
+	scale  int64
+}{
+	{"KIB", 1 << 10}, {"MIB", 1 << 20}, {"GIB", 1 << 30}, {"TIB", 1 << 40},
+	{"KB", 1e3}, {"MB", 1e6}, {"GB", 1e9}, {"TB", 1e12},
+	{"K", 1 << 10}, {"M", 1 << 20}, {"G", 1 << 30}, {"T", 1 << 40},
+	{"B", 1},
+}
+
+// ParseBytes reads a storage size. Both conventions are accepted and mean what
+// they say: "1GB" is 1e9 bytes, "1GiB" is 2^30. A bare number is bytes.
+func ParseBytes(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty size")
+	}
+
+	upper := strings.ToUpper(s)
+	for _, unit := range byteUnits {
+		if !strings.HasSuffix(upper, unit.suffix) {
+			continue
+		}
+		digits := strings.TrimSpace(upper[:len(upper)-len(unit.suffix)])
+		if digits == "" {
+			continue
+		}
+		n, err := strconv.ParseFloat(digits, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid size %q", s)
+		}
+		if n < 0 {
+			return 0, fmt.Errorf("invalid size %q: must not be negative", s)
+		}
+		return int64(n * float64(unit.scale)), nil
+	}
+
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid size %q", s)
+	}
+	return n, nil
 }
 
 // ParseDuration extends time.ParseDuration with the day and week suffixes that

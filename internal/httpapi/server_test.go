@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
-	"time"
 
 	"github.com/YuYu1015/haste-server/internal/compress"
 	"github.com/YuYu1015/haste-server/internal/config"
@@ -22,7 +21,7 @@ import (
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 
-	codec, err := compress.New(19)
+	codec, err := compress.New(compress.DefaultLevel)
 	if err != nil {
 		t.Fatalf("compress.New: %v", err)
 	}
@@ -30,8 +29,8 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 	cfg := &config.Config{
 		MaxChars:    4000,
-		ZstdLevel:   19,
-		Retention:   30 * 24 * time.Hour,
+		ZstdLevel:   compress.DefaultLevel,
+		MaxBytes:    16 << 20,
 		CORSOrigins: []string{"*"},
 		// Rate limiting has its own test; leave it off elsewhere so a burst of
 		// table-driven cases cannot trip it.
@@ -39,13 +38,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 
 	st, err := store.Open(context.Background(), store.Options{
-		Path:      filepath.Join(t.TempDir(), "haste.db"),
-		CacheMB:   8,
-		ReadPool:  4,
-		MaxChars:  cfg.MaxChars,
-		Retention: cfg.Retention,
-		Codec:     codec,
-		IDs:       id.NewGenerator([]byte("test-secret"), id.DefaultMinLen, ReservedCodes),
+		Path:     filepath.Join(t.TempDir(), "haste.db"),
+		CacheMB:  8,
+		ReadPool: 4,
+		MaxChars: cfg.MaxChars,
+		MaxBytes: cfg.MaxBytes,
+		Codec:    codec,
+		IDs:      id.NewGenerator([]byte("test-secret"), id.DefaultMinLen, ReservedCodes),
 	})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -92,8 +91,9 @@ func TestCreateAndFetch(t *testing.T) {
 	if created.Ratio <= 0 || created.Stored <= 0 {
 		t.Errorf("compression metadata missing: stored=%d ratio=%v", created.Stored, created.Ratio)
 	}
-	if created.ExpiresAt == nil {
-		t.Error("expiresAt should be set when retention is configured")
+	// No expiry is published: the server cannot promise one.
+	if strings.Contains(created.URL, "expires") {
+		t.Error("unexpected expiry in response")
 	}
 
 	// JSON read
@@ -350,8 +350,12 @@ func TestConfigEndpointMirrorsServerLimits(t *testing.T) {
 	if cfg["maxChars"] != float64(4000) {
 		t.Errorf("maxChars = %v, want 4000", cfg["maxChars"])
 	}
-	if cfg["retentionDays"] != float64(30) {
-		t.Errorf("retentionDays = %v, want 30", cfg["retentionDays"])
+	// Nothing about retention may reach the client, which must not display a
+	// lifetime the server has no way to honour.
+	for _, forbidden := range []string{"retention", "retentionDays", "expires", "ttl"} {
+		if _, present := cfg[forbidden]; present {
+			t.Errorf("/api/config leaked %q: %v", forbidden, cfg[forbidden])
+		}
 	}
 }
 

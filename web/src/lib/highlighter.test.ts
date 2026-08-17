@@ -32,6 +32,39 @@ async function severityColours(theme: "github-light" | "github-dark") {
   return found
 }
 
+/**
+ * The severity rules are appended to the theme, and appending to the wrong
+ * field replaces the theme's own rules instead of extending them — which leaves
+ * log levels coloured and every other language rendered flat. The severity
+ * tests above cannot see that, so ordinary syntax is checked here too.
+ */
+describe.each(["github-light", "github-dark"] as const)("theme integrity in %s", (theme) => {
+  const DART = `import 'package:flutter/material.dart';
+
+class Greeting extends StatelessWidget {
+  const Greeting({super.key, required this.name});
+  final String name;
+
+  @override
+  Widget build(BuildContext context) => Text('Hello');
+}`
+
+  it("still colours ordinary code", async () => {
+    const shiki = await ensureHighlighter("dart")
+    const { tokens } = shiki.codeToTokens(DART, { lang: "dart", theme })
+
+    const colours = new Set<string>()
+    for (const line of tokens) {
+      for (const token of line) {
+        if (token.content.trim() && token.color) colours.add(token.color.toUpperCase())
+      }
+    }
+
+    // Keywords, types, strings and punctuation should not all share one colour.
+    expect(colours.size).toBeGreaterThanOrEqual(4)
+  })
+})
+
 describe.each([
   ["github-light", "light"],
   ["github-dark", "dark"],

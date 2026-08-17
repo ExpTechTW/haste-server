@@ -33,11 +33,13 @@ export function LanguagePicker({
 }) {
   const [open, setOpen] = React.useState(false)
 
+  // "Auto(Dart)" rather than "Auto · Dart": short enough to say both things at
+  // any width, so the phone no longer has to drop half of it.
   const label =
     value === AUTO
       ? detected === PLAIN
         ? "Auto"
-        : `Auto · ${languageLabel(detected)}`
+        : `Auto(${languageLabel(detected)})`
       : languageLabel(value)
 
   const select = (next: string) => {
@@ -54,7 +56,9 @@ export function LanguagePicker({
           role="combobox"
           aria-expanded={open}
           aria-label="Syntax highlighting"
-          className="w-[11rem] justify-between font-normal"
+          // Allowed to shrink: the character counter grows as a paste fills up, and
+          // this is what keeps the row from wrapping when it does.
+          className="w-[7.5rem] min-w-18 shrink justify-between font-normal sm:w-[11rem]"
         >
           <span className="truncate">{label}</span>
           <ChevronsUpDownIcon className="opacity-50" />
@@ -82,7 +86,7 @@ export function LanguagePicker({
                 <span className="flex-1 truncate">
                   Auto
                   {detected !== PLAIN && (
-                    <span className="text-muted-foreground"> · {languageLabel(detected)}</span>
+                    <span className="text-muted-foreground">({languageLabel(detected)})</span>
                   )}
                 </span>
                 <CheckIcon className={cn("size-3.5", value !== AUTO && "invisible")} />

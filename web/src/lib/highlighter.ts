@@ -26,7 +26,15 @@ const loadedLanguages = new Set<string>()
  * These rules put the levels back in the order a reader expects. The values are
  * GitHub's own Primer palette, so they sit correctly against both themes.
  */
-const LOG_SEVERITY = {
+interface SeverityPalette {
+  error: string
+  warning: string
+  info: string
+  debug: string
+  verbose: string
+}
+
+const LOG_SEVERITY: Record<"light" | "dark", SeverityPalette> = {
   light: {
     error: "#CF222E",
     warning: "#9A6700",
@@ -41,11 +49,11 @@ const LOG_SEVERITY = {
     debug: "#8B949E",
     verbose: "#6E7681",
   },
-} as const
+}
 
 type ThemeLike = { settings?: unknown[]; tokenColors?: unknown[] }
 
-function withLogSeverity<T extends ThemeLike>(theme: T, palette: (typeof LOG_SEVERITY)["light"]): T {
+function withLogSeverity<T extends ThemeLike>(theme: T, palette: SeverityPalette): T {
   // Appended last and keyed on the innermost scope, so they win over the
   // generic rule the level would otherwise resolve through.
   const rules = [
@@ -55,7 +63,13 @@ function withLogSeverity<T extends ThemeLike>(theme: T, palette: (typeof LOG_SEV
     { scope: ["log.debug"], settings: { foreground: palette.debug } },
     { scope: ["log.verbose"], settings: { foreground: palette.verbose } },
   ]
-  return { ...theme, settings: [...(theme.settings ?? []), ...rules] }
+
+  // Shiki accepts a theme's rules under either name, and the bundled themes use
+  // tokenColors. Appending to the other one does not merge with it — it creates
+  // the field Shiki prefers, silently replacing every rule the theme had, which
+  // leaves only these five scopes coloured and everything else plain.
+  const field = Array.isArray(theme.tokenColors) ? "tokenColors" : "settings"
+  return { ...theme, [field]: [...(theme[field] ?? []), ...rules] }
 }
 
 async function create(): Promise<HighlighterCore> {

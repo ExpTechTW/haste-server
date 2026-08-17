@@ -34,8 +34,20 @@ const (
 	rounds        = 4
 )
 
-// size[l] is 62^l, the number of codes of exactly length l.
-var size [MaxLen + 1]uint64
+// tier describes one code length: how many codes it holds, and the Feistel
+// block that covers them. Both are fixed per length, so they are derived once
+// here rather than recomputed on every code.
+type tier struct {
+	size uint64 // 62^length
+	half uint   // half the block width, in bits
+	mask uint64 // 1<<half - 1
+}
+
+var tiers [MaxLen + 1]tier
+
+// alphabetSet answers "is this byte a code character" in one indexed load,
+// rather than by scanning the alphabet for each character of every lookup.
+var alphabetSet [256]bool
 
 // ErrExhausted means the counter outgrew MaxLen characters.
 var ErrExhausted = errors.New("id: code space exhausted")
@@ -44,7 +56,13 @@ func init() {
 	n := uint64(1)
 	for l := 1; l <= MaxLen; l++ {
 		n *= base
-		size[l] = n
+		// Half of the smallest even bit width w with 2^w >= n, which is what
+		// makes the Feistel network a permutation of a superset of the tier.
+		half := (uint(bits.Len64(n-1)) + 1) / 2
+		tiers[l] = tier{size: n, half: half, mask: 1<<half - 1}
+	}
+	for i := 0; i < len(Alphabet); i++ {
+		alphabetSet[Alphabet[i]] = true
 	}
 }
 
@@ -86,11 +104,12 @@ func (g *Generator) Code(seq uint64) (string, error) {
 	// Walk the tiers, consuming each one's capacity until the sequence number
 	// falls inside the current length.
 	idx := seq - 1
-	for l := g.minLen; l <= MaxLen; l++ {
-		if idx < size[l] {
-			return encode(g.permute(idx, size[l], l), l), nil
+	for length := g.minLen; length <= MaxLen; length++ {
+		t := tiers[length]
+		if idx < t.size {
+			return encode(g.permute(idx, t, length), length), nil
 		}
-		idx -= size[l]
+		idx -= t.size
 	}
 	return "", ErrExhausted
 }
@@ -107,8 +126,8 @@ func Capacity(minLen int) (uint64, error) {
 		return 0, fmt.Errorf("id: minimum length %d out of range 1..%d", minLen, MaxLen)
 	}
 	var total uint64
-	for l := minLen; l <= MaxLen; l++ {
-		total += size[l]
+	for length := minLen; length <= MaxLen; length++ {
+		total += tiers[length].size
 	}
 	return total, nil
 }
@@ -122,51 +141,40 @@ func Valid(code string) bool {
 		return false
 	}
 	for i := 0; i < len(code); i++ {
-		if !strings.ContainsRune(Alphabet, rune(code[i])) {
+		if !alphabetSet[code[i]] {
 			return false
 		}
 	}
 	return true
 }
 
-// permute shuffles x within [0, n) using a Feistel network over the smallest
-// even bit width that covers n, walking the cycle whenever a round lands
+// permute shuffles x within the tier using a Feistel network over the smallest
+// even bit width that covers it, walking the cycle whenever a round lands
 // outside the range. Cycle walking keeps the result a permutation of exactly
-// [0, n), which is what makes collisions structurally impossible.
-func (g *Generator) permute(x, n uint64, tier int) uint64 {
-	half := halfWidth(n)
-	mask := uint64(1)<<half - 1
+// [0, size), which is what makes collisions structurally impossible.
+func (g *Generator) permute(x uint64, t tier, length int) uint64 {
 	for {
-		x = g.feistel(x, half, mask, tier)
-		if x < n {
+		x = g.feistel(x, t, length)
+		if x < t.size {
 			return x
 		}
 	}
 }
 
-// halfWidth returns half of the smallest even bit width w with 2^w >= n.
-func halfWidth(n uint64) uint {
-	b := uint(bits.Len64(n - 1))
-	if b == 0 {
-		b = 1
-	}
-	return (b + 1) / 2
-}
-
-func (g *Generator) feistel(x uint64, half uint, mask uint64, tier int) uint64 {
-	l, r := (x>>half)&mask, x&mask
+func (g *Generator) feistel(x uint64, t tier, length int) uint64 {
+	l, r := (x>>t.half)&t.mask, x&t.mask
 	for round := 0; round < rounds; round++ {
-		l, r = r, l^g.round(round, tier, r, mask)
+		l, r = r, l^g.round(round, length, r, t.mask)
 	}
-	return l<<half | r
+	return l<<t.half | r
 }
 
-// round is the Feistel round function. Mixing the tier in gives every code
-// length an independent permutation.
-func (g *Generator) round(round, tier int, v, mask uint64) uint64 {
+// round is the Feistel round function. Mixing the code length in gives every
+// tier an independent permutation.
+func (g *Generator) round(round, length int, v, mask uint64) uint64 {
 	var buf [10]byte
 	buf[0] = byte(round)
-	buf[1] = byte(tier)
+	buf[1] = byte(length)
 	binary.BigEndian.PutUint64(buf[2:], v)
 
 	mac := hmac.New(sha256.New, g.key)

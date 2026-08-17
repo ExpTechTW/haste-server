@@ -28,14 +28,15 @@ type pasteResponse struct {
 	DownloadURL string `json:"downloadUrl"`
 	Filename    string `json:"filename"`
 
-	Language  string     `json:"language,omitempty"`
-	Content   string     `json:"content,omitempty"`
-	Chars     int        `json:"chars"`
-	Bytes     int        `json:"bytes"`
-	Stored    int        `json:"stored"`
-	Ratio     float64    `json:"ratio"`
-	CreatedAt time.Time  `json:"createdAt"`
-	ExpiresAt *time.Time `json:"expiresAt"`
+	Language string  `json:"language,omitempty"`
+	Content  string  `json:"content,omitempty"`
+	Chars    int     `json:"chars"`
+	Bytes    int     `json:"bytes"`
+	Stored   int     `json:"stored"`
+	Ratio    float64 `json:"ratio"`
+	// No expiry is published, because none can be honoured: a paste can be
+	// evicted as soon as the store needs its bytes back.
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type errorResponse struct {
@@ -48,17 +49,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfig lets the frontend enforce the same limits the server does,
-// instead of hard-coding a copy that can drift.
+// instead of hard-coding a copy that can drift. Retention is deliberately not
+// published: the client must not show a lifetime the server cannot promise.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
-	resp := map[string]any{
-		"maxChars":      s.cfg.MaxChars,
-		"zstdLevel":     s.cfg.ZstdLevel,
-		"retentionDays": s.cfg.Retention.Hours() / 24,
-		"retention":     s.cfg.Retention.String(),
-		"expires":       s.cfg.Retention > 0,
-	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, map[string]any{"maxChars": s.cfg.MaxChars})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -71,12 +66,17 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	if st.StoredSize > 0 {
 		ratio = float64(st.RawBytes) / float64(st.StoredSize)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"count":       st.Count,
 		"rawBytes":    st.RawBytes,
 		"storedBytes": st.StoredSize,
 		"ratio":       round2(ratio),
-	})
+	}
+	if st.MaxBytes > 0 {
+		resp["maxBytes"] = st.MaxBytes
+		resp["usedFraction"] = round2(float64(st.StoredSize) / float64(st.MaxBytes))
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -223,10 +223,6 @@ func (s *Server) describe(r *http.Request, p *store.Paste) pasteResponse {
 	if p.StoredSize > 0 {
 		resp.Ratio = round2(float64(p.RawBytes) / float64(p.StoredSize))
 	}
-	if !p.ExpiresAt.IsZero() {
-		expires := p.ExpiresAt
-		resp.ExpiresAt = &expires
-	}
 	return resp
 }
 
@@ -257,6 +253,13 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, "empty", "paste is empty")
 	case errors.Is(err, store.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
+	case errors.Is(err, store.ErrBusy):
+		w.Header().Set("Retry-After", "1")
+		writeError(w, http.StatusServiceUnavailable, "busy",
+			"the server is saving too many pastes right now, try again shortly")
+	case errors.Is(err, store.ErrNoRoom):
+		writeError(w, http.StatusInsufficientStorage, "no_room",
+			"the server's storage cap is smaller than this paste")
 	default:
 		s.log.Error("request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "internal server error")

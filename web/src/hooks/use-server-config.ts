@@ -8,9 +8,6 @@ import { fetchConfig, type ServerConfig } from "@/lib/api"
  */
 const FALLBACK: ServerConfig = {
   maxChars: 4000,
-  retentionDays: 30,
-  retention: "720h0m0s",
-  expires: true,
 }
 
 // Shared across mounts: the limits cannot change while the tab is open.
