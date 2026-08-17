@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/YuYu1015/haste-server/internal/config"
+	"github.com/YuYu1015/haste-server/internal/id"
 	"github.com/YuYu1015/haste-server/internal/store"
 )
 
@@ -31,6 +32,7 @@ type Server struct {
 	store   *store.Store
 	ui      fs.FS
 	uiTags  map[string]string
+	shell   shell
 	log     *slog.Logger
 	limiter *ipLimiter
 }
@@ -42,9 +44,20 @@ func New(cfg *config.Config, st *store.Store, ui fs.FS, log *slog.Logger) *Serve
 		store:   st,
 		ui:      ui,
 		uiTags:  buildETags(ui),
+		shell:   newShell(indexHTML(ui)),
 		log:     log,
 		limiter: newIPLimiter(cfg.RateRPS, cfg.RateBurst),
 	}
+}
+
+// indexHTML reads the shell once; a missing one is not an error here, because
+// serveIndex has its own answer for a frontend that was never built.
+func indexHTML(ui fs.FS) []byte {
+	body, err := fs.ReadFile(ui, "index.html")
+	if err != nil {
+		return nil
+	}
+	return body
 }
 
 // buildETags hashes every embedded file once at startup.
@@ -266,21 +279,37 @@ func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 	// The shell names the current asset bundle, so it must never be cached.
 	h.Set("Cache-Control", "no-cache")
 
-	b, err := fs.ReadFile(s.ui, "index.html")
-	if err != nil {
+	if s.shell.before == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		io.WriteString(w, uiMissingPage)
 		return
 	}
-	// no-cache means "revalidate first", not "do not store", so the tag is what
-	// makes that revalidation cheap.
-	if tag, ok := s.uiTags["index.html"]; ok {
-		h.Set("Etag", tag)
-		if match := r.Header.Get("If-None-Match"); match == tag {
-			w.WriteHeader(http.StatusNotModified)
-			return
+
+	// A code-shaped path is a paste, so the shell is given that paste's own
+	// title and description and a shared link can say what is behind it. The
+	// lookup reads metadata only, and a miss simply falls back to the defaults.
+	var paste *store.Paste
+	if code := strings.TrimPrefix(r.URL.Path, "/"); id.Valid(code) {
+		if meta, err := s.store.Meta(r.Context(), code); err == nil {
+			paste = meta
 		}
 	}
+
+	if paste != nil {
+		// Crawlable so a shared link can be unfurled, but never listed.
+		noIndex(w)
+	}
+
+	body := s.shell.render(paste)
+	// The tag has to cover the rendered document: two pastes share this URL
+	// shape but not this body.
+	tag := etagFor(body)
+	h.Set("Etag", tag)
+	if etagMatches(r.Header.Get("If-None-Match"), tag) {
+		h.Del("Content-Type")
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
-	w.Write(b)
+	w.Write(body)
 }

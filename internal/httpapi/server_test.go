@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -53,8 +54,14 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(func() { st.Close() })
 
+	// Mirrors the real shell closely enough to exercise the parts the server
+	// touches: the markers it rewrites between, and a default title to fall
+	// back to.
 	ui := fstest.MapFS{
-		"index.html":        &fstest.MapFile{Data: []byte("<!doctype html><div id=root></div>")},
+		"index.html": &fstest.MapFile{Data: []byte(
+			"<!doctype html><html><head><!--head:start-->\n" +
+				"<title>haste</title>\n" +
+				"<!--head:end--></head><body><div id=root></div></body></html>")},
 		"assets/app.123.js": &fstest.MapFile{Data: []byte("console.log(1)")},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -576,5 +583,110 @@ func TestMissingStaticFileIs404(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "id=root") {
 		t.Errorf("a code-shaped path should still serve the shell: status %d", resp.StatusCode)
+	}
+}
+
+// A shared link should say what is behind it, so the shell carries the paste's
+// own title and description rather than the site's generic ones.
+func TestPastePageCarriesItsOwnMetadata(t *testing.T) {
+	srv := newTestServer(t)
+	content := strings.Repeat("final item = compute();\n", 30)
+	_, created := postJSON(t, srv, createBody(t, content, "dart"))
+
+	fetch := func(path string) string {
+		t.Helper()
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return string(body)
+	}
+
+	page := fetch("/" + created.Key)
+	chars := strconv.Itoa(created.Chars)
+	for _, want := range []string{"Dart", chars, created.Key} {
+		if !strings.Contains(page, want) {
+			t.Errorf("paste page metadata is missing %q", want)
+		}
+	}
+
+	// The content itself must never reach the head: an unfurl is fetched and
+	// cached by a third party, and pastes hold logs and configuration.
+	if strings.Contains(page, "compute()") {
+		t.Error("paste content leaked into the shell")
+	}
+
+	// The landing page keeps the generic description.
+	if home := fetch("/"); strings.Contains(home, "Dart") || strings.Contains(home, chars+" 字元") {
+		t.Error("the landing page picked up a paste's metadata")
+	}
+
+	// An unknown code falls back rather than inventing anything.
+	if missing := fetch("/zzzzzzzz"); !strings.Contains(missing, "<title>haste</title>") {
+		t.Error("an unknown code should fall back to the default head")
+	}
+}
+
+// Two pastes share the URL shape but not the document, so a validator computed
+// over the shell alone would let a cache serve one preview for the other.
+func TestPastePagesHaveDistinctETags(t *testing.T) {
+	srv := newTestServer(t)
+	_, first := postJSON(t, srv, createBody(t, "package main", "go"))
+	_, second := postJSON(t, srv, createBody(t, strings.Repeat("x", 500), "python"))
+
+	tag := func(path string) string {
+		t.Helper()
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.Header.Get("Etag")
+	}
+
+	a, b, home := tag("/"+first.Key), tag("/"+second.Key), tag("/")
+	if a == "" || b == "" || home == "" {
+		t.Fatal("a shell response carried no ETag")
+	}
+	if a == b {
+		t.Error("two different pastes produced the same ETag")
+	}
+	if a == home || b == home {
+		t.Error("a paste page shares the landing page's ETag")
+	}
+}
+
+// Crawlable so a shared link can be unfurled, never listed in search results.
+func TestPasteResponsesAreNoIndex(t *testing.T) {
+	srv := newTestServer(t)
+	_, created := postJSON(t, srv, createBody(t, "package main", "go"))
+
+	for _, path := range []string{
+		"/" + created.Key,
+		"/api/pastes/" + created.Key,
+		"/raw/" + created.Key,
+		"/download/" + created.Key,
+		"/documents/" + created.Key,
+	} {
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if tag := resp.Header.Get("X-Robots-Tag"); !strings.Contains(tag, "noindex") {
+			t.Errorf("%s: X-Robots-Tag = %q, want noindex", path, tag)
+		}
+	}
+
+	// The landing page is the one thing worth finding in a search.
+	resp, err := srv.Client().Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if tag := resp.Header.Get("X-Robots-Tag"); tag != "" {
+		t.Errorf("the landing page should stay indexable, got %q", tag)
 	}
 }

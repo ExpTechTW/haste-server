@@ -1,9 +1,10 @@
-# A paste is someone's log or config, and the store can evict it at any moment,
-# so none of them are worth indexing — and some of them would be actively
-# harmful to index. Only the landing page is offered.
+# Paste URLs are 8 random base62 characters and are never linked from anywhere,
+# so nothing here is reachable by crawling in the first place. What matters is
+# that a link someone shares can still be unfurled into a preview, and that
+# needs the crawlers which generate those previews to be let in.
 #
-# Crawlers that do not understand the `$` anchor fall back to the Disallow and
-# skip the site entirely, which is the safe direction to fail in.
+# Keeping pastes out of search results is a separate job, done by the
+# `X-Robots-Tag: noindex` header on every paste response — the header can say
+# "fetch this, but do not index it", which robots.txt has no way to express.
 User-agent: *
-Allow: /$
-Disallow: /
+Disallow:

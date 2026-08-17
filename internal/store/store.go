@@ -370,6 +370,43 @@ func (s *Store) Get(ctx context.Context, code string) (*Paste, string, error) {
 	return &p, string(content), nil
 }
 
+// Meta returns a paste's metadata without its body.
+//
+// Rendering a link preview needs the language and the size, not the content, and
+// skipping the body means the blob pages are never read and nothing is
+// decompressed — the difference between a lookup and a full fetch.
+func (s *Store) Meta(ctx context.Context, code string) (*Paste, error) {
+	if !id.Valid(code) {
+		return nil, ErrNotFound
+	}
+
+	now := time.Now()
+	accessCutoff := cutoff(now, s.opts.TTLAccess)
+	createCutoff := cutoff(now, s.opts.TTLCreate)
+
+	var (
+		p       Paste
+		created int64
+	)
+	err := s.r.QueryRowContext(ctx,
+		`SELECT seq, code, bytes, chars, raw_bytes, language, created_at
+		   FROM pastes
+		  WHERE code = ?
+		    AND (? = 0 OR accessed_at > ?)
+		    AND (? = 0 OR created_at > ?)`,
+		code, accessCutoff, accessCutoff, createCutoff, createCutoff,
+	).Scan(&p.Seq, &p.Code, &p.StoredSize, &p.Chars, &p.RawBytes, &p.Language, &created)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, ErrNotFound
+	case err != nil:
+		return nil, fmt.Errorf("store: read paste metadata: %w", err)
+	}
+
+	p.CreatedAt = time.Unix(created, 0).UTC()
+	return &p, nil
+}
+
 // recordAccess queues a row's access time for the next flush.
 func (s *Store) recordAccess(seq uint64, when time.Time) {
 	s.accessMu.Lock()

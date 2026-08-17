@@ -151,6 +151,7 @@ func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := s.describe(r, p)
 	resp.Content = content
+	noIndex(w)
 	// Pastes are immutable, so a hit can be cached until it expires.
 	w.Header().Set("Cache-Control", "public, max-age=300, immutable")
 	writeJSON(w, http.StatusOK, resp)
@@ -162,6 +163,7 @@ func (s *Server) handleLegacyRead(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	noIndex(w)
 	writeJSON(w, http.StatusOK, map[string]string{"key": p.Code, "data": content})
 }
 
@@ -171,6 +173,7 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	noIndex(w)
 	h := w.Header()
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	// The body is attacker-supplied text served from this origin. nosniff plus
@@ -195,6 +198,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// fixed extension table — so the filename needs no further escaping.
 	filename := p.Code + "." + extensionFor(p.Language)
 
+	noIndex(w)
 	h := w.Header()
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Set("Content-Disposition", `attachment; filename="`+filename+`"`)
@@ -264,6 +268,13 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		s.log.Error("request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "internal server error")
 	}
+}
+
+// noIndex asks search engines not to list a paste, while still allowing the
+// fetch itself. robots.txt cannot draw that line: refusing the crawl there also
+// refuses the crawlers that build link previews.
+func noIndex(w http.ResponseWriter) {
+	w.Header().Set("X-Robots-Tag", "noindex")
 }
 
 func normalizeLanguage(s string) string {
