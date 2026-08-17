@@ -2,6 +2,8 @@
 
 *中文 · [English](README-EN.md)*
 
+**線上 Demo:** <https://haste.exptech.dev/>
+
 貼上程式碼或 log，拿到一個短分享碼。單一 Go binary：JSON API、raw 端點、React 前端全部內嵌其中。
 
 - **短 hash 風格分享碼，且結構上不可能碰撞** —— `k7Qm2Xp9`，不是 `1`、`2`、`3`。

@@ -2,6 +2,8 @@
 
 *[中文說明](README.md) · English*
 
+**Live demo:** <https://haste.exptech.dev/>
+
 Paste code or logs, get back a short share code. One Go binary: JSON API, raw
 endpoints, and the React frontend all embedded.
 
