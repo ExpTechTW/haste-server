@@ -55,17 +55,17 @@ func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	cfg := &Config{
-		Addr:            envStr("HASTE_ADDR", ":8080"),
-		BaseURL:         strings.TrimRight(envStr("HASTE_BASE_URL", ""), "/"),
-		DBPath:          envStr("HASTE_DB_PATH", "data/haste.db"),
-		ReadPool:        envInt("HASTE_READ_POOL", min(runtime.NumCPU(), 8)),
-		SQLiteCacheMB:   envInt("HASTE_SQLITE_CACHE_MB", 48),
-		MaxChars:        envInt("HASTE_MAX_CHARS", 4000),
-		ZstdLevel:       envInt("HASTE_ZSTD_LEVEL", DefaultZstdLevel),
-		RateRPS:         envFloat("HASTE_RATE_RPS", 1),
-		RateBurst:       envInt("HASTE_RATE_BURST", 20),
-		TrustProxy:      envBool("HASTE_TRUST_PROXY", false),
-		CORSOrigins:     envList("HASTE_CORS_ORIGINS", "*"),
+		Addr:          envStr("HASTE_ADDR", ":8080"),
+		BaseURL:       strings.TrimRight(envStr("HASTE_BASE_URL", ""), "/"),
+		DBPath:        envStr("HASTE_DB_PATH", "data/haste.db"),
+		ReadPool:      envInt("HASTE_READ_POOL", min(runtime.NumCPU(), 8)),
+		SQLiteCacheMB: envInt("HASTE_SQLITE_CACHE_MB", 48),
+		MaxChars:      envInt("HASTE_MAX_CHARS", 4000),
+		ZstdLevel:     envInt("HASTE_ZSTD_LEVEL", DefaultZstdLevel),
+		RateRPS:       envFloat("HASTE_RATE_RPS", 1),
+		RateBurst:     envInt("HASTE_RATE_BURST", 20),
+		TrustProxy:    envBool("HASTE_TRUST_PROXY", false),
+		CORSOrigins:   envList("HASTE_CORS_ORIGINS", "*"),
 	}
 
 	var err error

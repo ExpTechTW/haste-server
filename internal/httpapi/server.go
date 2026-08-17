@@ -191,16 +191,29 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, info.Name(), info.ModTime(), rs)
 }
 
+// uiMissingPage stands in when the binary was built without running the
+// frontend build. The API is fully functional in that state, so this explains
+// the gap rather than failing opaquely.
+const uiMissingPage = `<!doctype html><meta charset="utf-8"><title>haste</title>
+<style>body{font:14px/1.6 ui-monospace,Menlo,monospace;margin:6rem auto;max-width:34rem;padding:0 1.5rem}
+code{background:#8881;border-radius:4px;padding:.15rem .35rem}</style>
+<h1>Frontend not built</h1>
+<p>The API is running. Build the web assets and recompile:</p>
+<p><code>make build</code></p>
+<p>The JSON API at <code>/api/pastes</code> works without it.</p>`
+
 func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
-	b, err := fs.ReadFile(s.ui, "index.html")
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ui_missing", "frontend assets are not built")
-		return
-	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	// The shell names the current asset bundle, so it must never be cached.
 	h.Set("Cache-Control", "no-cache")
+
+	b, err := fs.ReadFile(s.ui, "index.html")
+	if err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		io.WriteString(w, uiMissingPage)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(b)
 }

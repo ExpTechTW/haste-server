@@ -123,16 +123,22 @@
   }
 
   .shiki {
-    @apply font-mono text-[13px] leading-[1.65];
+    @apply px-4 font-mono text-[13px] leading-[1.65] sm:px-6;
     counter-reset: shiki-line;
   }
 
+  /*
+   * Shiki separates line spans with literal newline text nodes, which under
+   * `white-space: pre` would each render as a second, empty line box. A grid
+   * container discards whitespace-only nodes between items, so rows land
+   * exactly one per line.
+   */
   .shiki code {
-    @apply block w-fit min-w-full;
+    @apply grid w-fit min-w-full;
   }
 
   .shiki .line {
-    @apply block min-h-[1.65em] pr-4;
+    @apply min-h-[1.65em] pr-4;
   }
 
   /* Gutter drawn with a counter so the numbers can never be copied with the code. */

@@ -1,5 +1,4 @@
-import { createHighlighterCore } from "shiki/core"
-import { createJavaScriptRegexEngine } from "shiki/engine/javascript"
+import type { HighlighterCore } from "shiki/core"
 
 import { PLAIN, loaderFor } from "./languages"
 
@@ -11,22 +10,30 @@ import { PLAIN, loaderFor } from "./languages"
  */
 export const THEMES = { light: "github-light", dark: "github-dark" } as const
 
-type Highlighter = Awaited<ReturnType<typeof createHighlighterCore>>
-
-let highlighterPromise: Promise<Highlighter> | null = null
+let highlighterPromise: Promise<HighlighterCore> | null = null
 const loadedLanguages = new Set<string>()
 
-function highlighter(): Promise<Highlighter> {
-  // The core bundle ships no grammars and the JavaScript regex engine avoids
-  // the ~500 KB oniguruma WASM payload entirely.
-  highlighterPromise ??= createHighlighterCore({
+async function create(): Promise<HighlighterCore> {
+  // Imported dynamically so the engine and themes land in their own chunk: the
+  // editor never highlights anything, and should not download a highlighter.
+  const [{ createHighlighterCore }, { createJavaScriptRegexEngine }] = await Promise.all([
+    import("shiki/core"),
+    import("shiki/engine/javascript"),
+  ])
+
+  return createHighlighterCore({
     themes: [
       import("@shikijs/themes/github-light"),
       import("@shikijs/themes/github-dark"),
     ],
     langs: [],
+    // The JavaScript engine avoids the ~500 KB oniguruma WASM payload.
     engine: createJavaScriptRegexEngine({ forgiving: true }),
   })
+}
+
+function highlighter(): Promise<HighlighterCore> {
+  highlighterPromise ??= create()
   return highlighterPromise
 }
 
@@ -53,8 +60,8 @@ export async function highlight(code: string, language: string): Promise<string>
 }
 
 /**
- * Warms the highlighter while the user is still typing, so saving a paste does
- * not also pay for the first grammar fetch.
+ * Warms the highlighter and grammar while the user is still typing, so opening
+ * the saved paste does not also pay for the first download.
  */
 export function prewarm(language: string): void {
   void highlighter()

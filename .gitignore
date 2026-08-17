@@ -1,0 +1,15 @@
+/bin/
+/data/
+.env
+
+node_modules/
+web/node_modules/
+
+# Built by `make web`; the directory itself must exist for go:embed to compile.
+/internal/webui/dist/*
+!/internal/webui/dist/.gitkeep
+
+.DS_Store
+*.db
+*.db-wal
+*.db-shm

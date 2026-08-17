@@ -48,11 +48,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // instead of hard-coding a copy that can drift.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
-		"maxChars":       s.cfg.MaxChars,
-		"zstdLevel":      s.cfg.ZstdLevel,
-		"retentionDays":  s.cfg.Retention.Hours() / 24,
-		"retention":      s.cfg.Retention.String(),
-		"expires":        s.cfg.Retention > 0,
+		"maxChars":      s.cfg.MaxChars,
+		"zstdLevel":     s.cfg.ZstdLevel,
+		"retentionDays": s.cfg.Retention.Hours() / 24,
+		"retention":     s.cfg.Retention.String(),
+		"expires":       s.cfg.Retention > 0,
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	writeJSON(w, http.StatusOK, resp)

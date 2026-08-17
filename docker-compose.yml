@@ -1,0 +1,24 @@
+services:
+  haste:
+    build: .
+    image: haste-server:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Holds haste.db, its WAL sidecars, and the generated .id_secret.
+      - haste-data:/data
+    environment:
+      HASTE_ADDR: ":8080"
+      HASTE_DB_PATH: /data/haste.db
+      HASTE_MAX_CHARS: "4000"
+      HASTE_RETENTION: 30d
+      HASTE_CLEANUP_INTERVAL: 1h
+      HASTE_ZSTD_LEVEL: "19"
+      HASTE_SQLITE_CACHE_MB: "48"
+      HASTE_READ_POOL: "8"
+      # Set when running behind a reverse proxy, together with HASTE_BASE_URL.
+      HASTE_TRUST_PROXY: "false"
+
+volumes:
+  haste-data:

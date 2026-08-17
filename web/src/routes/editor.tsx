@@ -18,7 +18,7 @@ import { useServerConfig } from "@/hooks/use-server-config"
 import { ApiError, createPaste } from "@/lib/api"
 import { prewarm } from "@/lib/highlighter"
 import { LANGUAGES, PLAIN, detectLanguage, languageLabel } from "@/lib/languages"
-import { cn } from "@/lib/utils"
+import { cn, modKey } from "@/lib/utils"
 
 const AUTO = "auto"
 
@@ -39,7 +39,6 @@ export function EditorPage() {
   const [saving, setSaving] = React.useState(false)
   const [dragging, setDragging] = React.useState(false)
 
-  const textareaRef = React.useRef<HTMLTextAreaElement>(null)
   // Escape arms a single tab-out, so the editor swallows Tab for indentation
   // without becoming a keyboard trap.
   const tabExits = React.useRef(false)
@@ -76,8 +75,9 @@ export function EditorPage() {
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const save2 = (event.metaKey || event.ctrlKey) && (event.key === "s" || event.key === "Enter")
-      if (save2) {
+      const isSaveChord =
+        (event.metaKey || event.ctrlKey) && (event.key === "s" || event.key === "Enter")
+      if (isSaveChord) {
         event.preventDefault()
         void save()
       }
@@ -141,7 +141,6 @@ export function EditorPage() {
         }}
       >
         <textarea
-          ref={textareaRef}
           value={content}
           onChange={(e) => setContent(e.target.value)}
           onKeyDown={onTextareaKeyDown}
@@ -218,7 +217,7 @@ export function EditorPage() {
                 `Over the ${config.maxChars.toLocaleString()} character limit`
               ) : (
                 <span className="flex items-center gap-1.5">
-                  Save <Kbd>⌘S</Kbd>
+                  Save <Kbd>{modKey()}S</Kbd>
                 </span>
               )}
             </TooltipContent>

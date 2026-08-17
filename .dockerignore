@@ -1,0 +1,13 @@
+.git
+.github
+bin
+data
+.env
+*.db
+*.db-wal
+*.db-shm
+node_modules
+web/node_modules
+internal/webui/dist
+README.md
+Makefile

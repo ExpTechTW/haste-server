@@ -38,10 +38,10 @@ func TestCodeLengthGrowsOnlyWhenTierFills(t *testing.T) {
 	}{
 		{1, 1},
 		{62, 1},
-		{63, 2},        // first code that cannot fit in one character
-		{3906, 2},      // 62 + 62^2
+		{63, 2},   // first code that cannot fit in one character
+		{3906, 2}, // 62 + 62^2
 		{3907, 3},
-		{242234, 3},    // 3906 + 62^3
+		{242234, 3}, // 3906 + 62^3
 		{242235, 4},
 	}
 	for _, tc := range cases {

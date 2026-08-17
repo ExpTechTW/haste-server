@@ -202,11 +202,11 @@ func (s *Store) Get(ctx context.Context, code string) (*Paste, string, error) {
 	}
 
 	var (
-		p         Paste
-		body      []byte
-		codec     int
-		created   int64
-		expires   int64
+		p       Paste
+		body    []byte
+		codec   int
+		created int64
+		expires int64
 	)
 	err := s.r.QueryRowContext(ctx,
 		`SELECT seq, code, body, codec, chars, raw_bytes, language, created_at, expires_at

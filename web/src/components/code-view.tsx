@@ -39,7 +39,6 @@ export function CodeView({ code, language }: { code: string; language: string })
             // eslint-disable-next-line react/no-array-index-key
             <span className="line" key={i}>
               {line}
-              {"\n"}
             </span>
           ))}
         </code>
