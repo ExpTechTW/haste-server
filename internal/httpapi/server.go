@@ -204,19 +204,19 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 
 	f, err := s.ui.Open(name)
 	if err != nil {
-		s.serveIndex(w, r)
+		s.missingUIFile(w, r, name)
 		return
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil || info.IsDir() {
-		s.serveIndex(w, r)
+		s.missingUIFile(w, r, name)
 		return
 	}
 	rs, ok := f.(io.ReadSeeker)
 	if !ok {
-		s.serveIndex(w, r)
+		s.missingUIFile(w, r, name)
 		return
 	}
 
@@ -232,6 +232,21 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Etag", tag)
 	}
 	http.ServeContent(w, r, info.Name(), info.ModTime(), rs)
+}
+
+// missingUIFile decides what an unmatched path deserves.
+//
+// A name with an extension is asking for a file: share codes are base62 and
+// never contain a dot, so nothing client-routed looks like this. Answering
+// those with the shell would return 200 and an HTML body for a missing asset —
+// which a browser then fails to parse as script, or quietly refuses to use as
+// an icon, with no sign of what went wrong.
+func (s *Server) missingUIFile(w http.ResponseWriter, r *http.Request, name string) {
+	if strings.Contains(path.Base(name), ".") {
+		writeError(w, http.StatusNotFound, "not_found", "no such file")
+		return
+	}
+	s.serveIndex(w, r)
 }
 
 // uiMissingPage stands in when the binary was built without running the

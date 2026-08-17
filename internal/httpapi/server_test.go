@@ -549,3 +549,32 @@ func TestStaticAssetsCarryETags(t *testing.T) {
 		}
 	}
 }
+
+// A missing file must say so. Answering it with the SPA shell returns 200 and
+// an HTML body, which a browser then fails to parse as script or refuses to
+// use as an icon — with nothing in the response to explain why.
+func TestMissingStaticFileIs404(t *testing.T) {
+	srv := newTestServer(t)
+
+	for _, path := range []string{"/favicon.ico", "/assets/gone.js", "/nope.png", "/manifest.json"} {
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: status = %d, want 404", path, resp.StatusCode)
+		}
+	}
+
+	// A share code has no extension, so it still reaches the client router.
+	resp, err := srv.Client().Get(srv.URL + "/aB3xK9pQ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "id=root") {
+		t.Errorf("a code-shaped path should still serve the shell: status %d", resp.StatusCode)
+	}
+}

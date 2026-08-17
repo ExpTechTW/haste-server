@@ -47,8 +47,15 @@
     <meta name="twitter:description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
     <meta name="twitter:image" content="/ExpTech.jpg" />
 
+    <!--
+      The SVG carries width and height as well as a viewBox: without an
+      intrinsic size some browsers refuse to rasterise it and the tab ends up
+      blank. The PNG is rasterised from that same SVG for anything that cannot
+      use one at all.
+    -->
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/ExpTech.jpg" />
+    <link rel="alternate icon" href="/favicon.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 
     <script>
       // Resolve the theme before first paint so a dark-mode reload never
