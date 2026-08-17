@@ -1,11 +1,55 @@
 <!doctype html>
-<html lang="en" suppressHydrationWarning>
+<html lang="zh-Hant-TW">
   <head>
+    <!--
+      The document is zh-Hant-TW rather than zh-TW: the script subtag is the
+      part that keeps a browser from offering to "translate" the page into
+      Simplified Chinese for a reader who already reads Traditional.
+    -->
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Paste code and logs, get a short immutable link." />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+
     <title>haste</title>
+    <meta name="description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
+    <meta name="application-name" content="haste" />
+    <meta name="author" content="ExpTech Studio" />
+
+    <!--
+      Tells the browser both palettes exist, so form controls, scrollbars and the
+      canvas behind the page match the theme before any CSS has parsed.
+      theme-color does the same for the browser's own chrome on mobile; the two
+      values are the rendered background of each theme.
+    -->
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)" />
+
+    <!--
+      Pasted logs are full of things iOS would otherwise turn into tel: links —
+      ports, timestamps, IP addresses — which makes the code unreadable and
+      unselectable on a phone.
+    -->
+    <meta name="format-detection" content="telephone=no" />
+
+    <!-- Link previews, for the chat windows share links actually get pasted into. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ExpTech Studio" />
+    <meta property="og:title" content="haste" />
+    <meta property="og:description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
+    <meta property="og:image" content="/ExpTech.jpg" />
+    <meta property="og:image:width" content="256" />
+    <meta property="og:image:height" content="256" />
+    <meta property="og:locale" content="zh_TW" />
+
+    <!-- summary rather than summary_large_image: the logo is square. -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="haste" />
+    <meta name="twitter:description" content="貼上程式碼或 log，取得一個簡短的分享連結。" />
+    <meta name="twitter:image" content="/ExpTech.jpg" />
+
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/ExpTech.jpg" />
+
     <script>
       // Resolve the theme before first paint so a dark-mode reload never
       // flashes a white page.

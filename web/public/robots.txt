@@ -1,0 +1,9 @@
+# A paste is someone's log or config, and the store can evict it at any moment,
+# so none of them are worth indexing — and some of them would be actively
+# harmful to index. Only the landing page is offered.
+#
+# Crawlers that do not understand the `$` anchor fall back to the Disallow and
+# skip the site entirely, which is the safe direction to fail in.
+User-agent: *
+Allow: /$
+Disallow: /
