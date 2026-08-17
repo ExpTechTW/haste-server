@@ -2,6 +2,9 @@ export interface Paste {
   key: string
   url: string
   rawUrl: string
+  downloadUrl: string
+  /** Share code plus the extension its language implies, e.g. "k7Qm2Xp9.dart". */
+  filename: string
   language?: string
   content?: string
   chars: number
@@ -14,7 +17,6 @@ export interface Paste {
 
 export interface ServerConfig {
   maxChars: number
-  zstdLevel: number
   retentionDays: number
   retention: string
   expires: boolean

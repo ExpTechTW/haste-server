@@ -10,13 +10,6 @@ export function modKey(): string {
   return /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘" : "Ctrl+"
 }
 
-/** Formats a byte count for the compression readout. */
-export function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
 /** Renders a future timestamp as a coarse "expires in" phrase. */
 export function formatExpiry(iso: string | null): string | null {
   if (!iso) return null

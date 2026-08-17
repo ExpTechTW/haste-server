@@ -1,14 +1,14 @@
-// Package id turns a monotonic counter into the shortest possible share code.
+// Package id turns a monotonic counter into a short, unguessable share code.
 //
 // The counter guarantees uniqueness, so codes never collide and never need a
-// retry loop against the database. Codes are laid out in tiers: the first 62
-// pastes get 1-character codes, the next 3 844 get 2 characters, and so on, so
-// length only ever grows when the shorter space is genuinely exhausted.
+// retry loop against the database. Codes start at a configured minimum length
+// and only grow when that space is genuinely exhausted.
 //
-// Handing out the raw counter would make every code guessable, so within each
-// tier the counter is run through a keyed Feistel permutation with cycle
-// walking. That is a bijection over exactly the tier's code space: still no
-// collisions, still minimal length, but consecutive pastes land far apart.
+// Handing out the raw counter would make every code one increment away from
+// being guessed in the address bar, so within each length tier the counter runs
+// through a keyed Feistel permutation with cycle walking. That is a bijection
+// onto exactly that tier's code space: still no collisions, still minimal
+// length, but the result is indistinguishable from a random base62 hash.
 package id
 
 import (
@@ -28,60 +28,71 @@ const (
 	base = uint64(62)
 	// MaxLen caps the tier ladder. 62^10 is ~8.4e17 codes, still inside uint64.
 	MaxLen = 10
-	rounds = 4
+	// DefaultMinLen reads as a short hash and puts 2.2e14 codes between any two
+	// live pastes, which is what makes walking the URL space pointless.
+	DefaultMinLen = 8
+	rounds        = 4
 )
 
-var (
-	// offset[l] is how many codes exist below length l, so tier l covers the
-	// zero-based counter range [offset[l], offset[l+1]).
-	offset [MaxLen + 2]uint64
-	// size[l] is 62^l, the number of codes of exactly length l.
-	size [MaxLen + 1]uint64
+// size[l] is 62^l, the number of codes of exactly length l.
+var size [MaxLen + 1]uint64
 
-	// ErrExhausted means the counter outgrew MaxLen characters.
-	ErrExhausted = errors.New("id: code space exhausted")
-)
+// ErrExhausted means the counter outgrew MaxLen characters.
+var ErrExhausted = errors.New("id: code space exhausted")
 
 func init() {
 	n := uint64(1)
 	for l := 1; l <= MaxLen; l++ {
 		n *= base
 		size[l] = n
-		offset[l+1] = offset[l] + n
 	}
 }
 
 // Generator maps sequence numbers to share codes. It is safe for concurrent use.
 type Generator struct {
 	key      []byte
+	minLen   int
 	reserved map[string]struct{}
 }
 
-// NewGenerator keys the permutation with secret. Codes matching any reserved
-// word (compared case-insensitively) are refused, so share codes can never
-// shadow a real route such as /api or /raw.
-func NewGenerator(secret []byte, reserved []string) *Generator {
-	g := &Generator{key: secret, reserved: make(map[string]struct{}, len(reserved))}
+// NewGenerator keys the permutation with secret and issues codes of at least
+// minLen characters. Codes matching any reserved word (compared
+// case-insensitively) are refused, so a share code can never shadow a route.
+// minLen is clamped into range; callers validate it for a useful error message.
+func NewGenerator(secret []byte, minLen int, reserved []string) *Generator {
+	switch {
+	case minLen < 1:
+		minLen = 1
+	case minLen > MaxLen:
+		minLen = MaxLen
+	}
+
+	g := &Generator{key: secret, minLen: minLen, reserved: make(map[string]struct{}, len(reserved))}
 	for _, r := range reserved {
 		g.reserved[strings.ToLower(r)] = struct{}{}
 	}
 	return g
 }
 
+// MinLen reports the shortest code this generator will issue.
+func (g *Generator) MinLen() int { return g.minLen }
+
 // Code returns the share code for a 1-based sequence number.
 func (g *Generator) Code(seq uint64) (string, error) {
 	if seq == 0 {
 		return "", errors.New("id: sequence numbers start at 1")
 	}
-	m := seq - 1
-	l := 1
-	for l <= MaxLen && m >= offset[l+1] {
-		l++
+
+	// Walk the tiers, consuming each one's capacity until the sequence number
+	// falls inside the current length.
+	idx := seq - 1
+	for l := g.minLen; l <= MaxLen; l++ {
+		if idx < size[l] {
+			return encode(g.permute(idx, size[l], l), l), nil
+		}
+		idx -= size[l]
 	}
-	if l > MaxLen {
-		return "", ErrExhausted
-	}
-	return encode(g.permute(m-offset[l], size[l], l), l), nil
+	return "", ErrExhausted
 }
 
 // IsReserved reports whether a code would shadow a fixed route.
@@ -90,8 +101,22 @@ func (g *Generator) IsReserved(code string) bool {
 	return ok
 }
 
+// Capacity reports how many codes exist between minLen and MaxLen characters.
+func Capacity(minLen int) (uint64, error) {
+	if minLen < 1 || minLen > MaxLen {
+		return 0, fmt.Errorf("id: minimum length %d out of range 1..%d", minLen, MaxLen)
+	}
+	var total uint64
+	for l := minLen; l <= MaxLen; l++ {
+		total += size[l]
+	}
+	return total, nil
+}
+
 // Valid reports whether code could ever have been issued. Cheap input
-// validation that keeps malformed lookups away from the database.
+// validation that keeps malformed lookups away from the database. It checks
+// shape only, not the current minimum length, so codes issued under an older
+// setting stay resolvable.
 func Valid(code string) bool {
 	if len(code) == 0 || len(code) > MaxLen {
 		return false
@@ -157,12 +182,4 @@ func encode(v uint64, l int) string {
 		v /= base
 	}
 	return string(buf)
-}
-
-// Capacity reports how many codes fit in codes of at most l characters.
-func Capacity(l int) (uint64, error) {
-	if l < 1 || l > MaxLen {
-		return 0, fmt.Errorf("id: length %d out of range 1..%d", l, MaxLen)
-	}
-	return offset[l+1], nil
 }

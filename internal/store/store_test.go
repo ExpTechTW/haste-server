@@ -29,7 +29,7 @@ func newTestStore(t *testing.T, retention time.Duration) *Store {
 		MaxChars:  4000,
 		Retention: retention,
 		Codec:     codec,
-		IDs:       id.NewGenerator([]byte("test-secret"), []string{"api", "raw"}),
+		IDs:       id.NewGenerator([]byte("test-secret"), id.DefaultMinLen, []string{"api", "raw"}),
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -70,17 +70,28 @@ func TestCreateAndGetRoundTrip(t *testing.T) {
 	}
 }
 
-func TestFirstCodesAreSingleCharacter(t *testing.T) {
+// Codes must read as hashes from the very first paste, not as a counter that
+// happens to start small.
+func TestCodesAreMinimumLengthAndUnordered(t *testing.T) {
 	st := newTestStore(t, time.Hour)
 	ctx := context.Background()
 
+	var codes []string
 	for i := 0; i < 20; i++ {
 		p, err := st.Create(ctx, "x", "")
 		if err != nil {
 			t.Fatalf("Create #%d: %v", i, err)
 		}
-		if len(p.Code) != 1 {
-			t.Fatalf("paste #%d got code %q; the first 62 should be one character", i, p.Code)
+		if len(p.Code) != id.DefaultMinLen {
+			t.Fatalf("paste #%d got code %q (len %d), want %d", i, p.Code, len(p.Code), id.DefaultMinLen)
+		}
+		codes = append(codes, p.Code)
+	}
+
+	// Sequential codes would make the address bar a directory of other pastes.
+	for i := 1; i < len(codes); i++ {
+		if codes[i-1][:3] == codes[i][:3] {
+			t.Errorf("consecutive codes %q and %q share a prefix", codes[i-1], codes[i])
 		}
 	}
 }

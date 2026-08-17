@@ -5,15 +5,15 @@ import (
 	"testing"
 )
 
-func newTestGenerator(t *testing.T) *Generator {
+func newTestGenerator(t *testing.T, minLen int) *Generator {
 	t.Helper()
-	return NewGenerator([]byte("test-secret-value"), []string{"api", "raw"})
+	return NewGenerator([]byte("test-secret-value"), minLen, []string{"api", "raw"})
 }
 
 // The whole point of deriving codes from a counter is that collisions are
 // structurally impossible. This asserts it across three tier boundaries.
 func TestCodesAreUniqueAcrossTiers(t *testing.T) {
-	g := newTestGenerator(t)
+	g := newTestGenerator(t, 1)
 	const n = 300_000
 
 	seen := make(map[string]uint64, n)
@@ -30,7 +30,7 @@ func TestCodesAreUniqueAcrossTiers(t *testing.T) {
 }
 
 func TestCodeLengthGrowsOnlyWhenTierFills(t *testing.T) {
-	g := newTestGenerator(t)
+	g := newTestGenerator(t, 1)
 
 	cases := []struct {
 		seq  uint64
@@ -55,10 +55,33 @@ func TestCodeLengthGrowsOnlyWhenTierFills(t *testing.T) {
 	}
 }
 
+// The minimum length is what stops anyone from walking the URL space by hand.
+func TestMinimumLengthIsHonoured(t *testing.T) {
+	g := newTestGenerator(t, DefaultMinLen)
+
+	for _, seq := range []uint64{1, 2, 63, 1_000, 1_000_000} {
+		code, err := g.Code(seq)
+		if err != nil {
+			t.Fatalf("Code(%d): %v", seq, err)
+		}
+		if len(code) != DefaultMinLen {
+			t.Errorf("Code(%d) = %q (len %d), want len %d", seq, code, len(code), DefaultMinLen)
+		}
+	}
+
+	// The tier above only opens once the minimum-length tier is full.
+	if code, err := g.Code(size[DefaultMinLen]); err != nil || len(code) != DefaultMinLen {
+		t.Errorf("last code of the first tier = %q (%v), want %d chars", code, err, DefaultMinLen)
+	}
+	if code, err := g.Code(size[DefaultMinLen] + 1); err != nil || len(code) != DefaultMinLen+1 {
+		t.Errorf("first code past the tier = %q (%v), want %d chars", code, err, DefaultMinLen+1)
+	}
+}
+
 // Cycle walking must permute each tier onto itself, not merely avoid repeats:
 // the first 62 sequence numbers have to cover the alphabet exactly once.
 func TestFirstTierIsAPermutationOfTheAlphabet(t *testing.T) {
-	g := newTestGenerator(t)
+	g := newTestGenerator(t, 1)
 
 	var got []byte
 	for seq := uint64(1); seq <= 62; seq++ {
@@ -73,44 +96,77 @@ func TestFirstTierIsAPermutationOfTheAlphabet(t *testing.T) {
 	}
 }
 
-// Codes must be shuffled, not sequential — otherwise every paste is one
-// increment away from being guessed.
-func TestCodesAreNotSequential(t *testing.T) {
-	g := newTestGenerator(t)
+// Consecutive pastes must land far apart, or the address bar becomes a browser
+// for other people's pastes.
+func TestConsecutiveCodesShareNoPrefix(t *testing.T) {
+	g := newTestGenerator(t, DefaultMinLen)
 
-	var sequential int
-	for seq := uint64(1); seq < 200; seq++ {
+	var neighbours int
+	for seq := uint64(1); seq < 500; seq++ {
 		a, _ := g.Code(seq)
 		b, _ := g.Code(seq + 1)
-		if len(a) == len(b) && strings.IndexByte(Alphabet, b[len(b)-1])-strings.IndexByte(Alphabet, a[len(a)-1]) == 1 {
-			sequential++
+		if commonPrefix(a, b) >= 3 {
+			neighbours++
 		}
 	}
-	// A real permutation lands adjacent by chance roughly 1/62 of the time.
-	if sequential > 20 {
-		t.Errorf("%d/199 consecutive pairs were adjacent codes; permutation looks broken", sequential)
+	if neighbours > 0 {
+		t.Errorf("%d consecutive pairs shared a 3-character prefix; the permutation is leaking order", neighbours)
+	}
+}
+
+// A hash-looking code should mix letters and digits rather than reading as a
+// number. Base62 gives that for free, but only if the encoding is really used.
+func TestCodesLookLikeHashes(t *testing.T) {
+	g := newTestGenerator(t, DefaultMinLen)
+
+	var allDigits, hasLetter, hasDigit int
+	const n = 2000
+	for seq := uint64(1); seq <= n; seq++ {
+		code, err := g.Code(seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.IndexFunc(code, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+			allDigits++
+		}
+		if strings.ContainsAny(code, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") {
+			hasLetter++
+		}
+		if strings.ContainsAny(code, "0123456789") {
+			hasDigit++
+		}
+	}
+	// A code that reads as a bare number is the thing being ruled out.
+	if allDigits > 0 {
+		t.Errorf("%d/%d codes were all digits", allDigits, n)
+	}
+	// For a uniform base62 code of DefaultMinLen characters, a letter appears
+	// with probability 1-(10/62)^8, which rounds to certainty, and a digit with
+	// probability 1-(52/62)^8 ~= 0.755. Anything far off means the encoder is
+	// not really spreading across the alphabet.
+	if hasLetter < n*99/100 {
+		t.Errorf("letters in %d/%d codes, expected effectively all", hasLetter, n)
+	}
+	if hasDigit < n*68/100 || hasDigit > n*83/100 {
+		t.Errorf("digits in %d/%d codes, expected ~75%% for uniform base62", hasDigit, n)
 	}
 }
 
 func TestDifferentSecretsProduceDifferentCodes(t *testing.T) {
-	a := NewGenerator([]byte("secret-a"), nil)
-	b := NewGenerator([]byte("secret-b"), nil)
+	a := NewGenerator([]byte("secret-a"), DefaultMinLen, nil)
+	b := NewGenerator([]byte("secret-b"), DefaultMinLen, nil)
 
-	var same int
 	for seq := uint64(1); seq <= 500; seq++ {
 		ca, _ := a.Code(seq)
 		cb, _ := b.Code(seq)
 		if ca == cb {
-			same++
+			t.Fatalf("seq %d produced %q under both secrets; the key is not being mixed in", seq, ca)
 		}
-	}
-	if same > 30 {
-		t.Errorf("%d/500 codes matched across secrets; the key is not being mixed in", same)
 	}
 }
 
 func TestReservedAndValid(t *testing.T) {
-	g := newTestGenerator(t)
+	g := newTestGenerator(t, 1)
 
 	if !g.IsReserved("API") {
 		t.Error("IsReserved should be case-insensitive")
@@ -132,8 +188,8 @@ func TestReservedAndValid(t *testing.T) {
 }
 
 func TestExhaustion(t *testing.T) {
-	g := newTestGenerator(t)
-	full, err := Capacity(MaxLen)
+	g := newTestGenerator(t, 1)
+	full, err := Capacity(1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +199,23 @@ func TestExhaustion(t *testing.T) {
 	if _, err := g.Code(full + 1); err == nil {
 		t.Error("Code past the last tier should report exhaustion")
 	}
+}
+
+func TestMinLenIsClamped(t *testing.T) {
+	if got := NewGenerator(nil, 0, nil).MinLen(); got != 1 {
+		t.Errorf("minLen 0 clamped to %d, want 1", got)
+	}
+	if got := NewGenerator(nil, 99, nil).MinLen(); got != MaxLen {
+		t.Errorf("minLen 99 clamped to %d, want %d", got, MaxLen)
+	}
+}
+
+func commonPrefix(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	return n
 }
 
 func sortedString(s string) string {

@@ -27,6 +27,8 @@
   --warning: oklch(0.63 0.15 68);
   /* Surface the editor and code panes sit on, one step off the page. */
   --surface: oklch(0.985 0 0);
+  /* Backdrop for lines selected through the #L17-L25 fragment. */
+  --line-highlight: oklch(0.95 0.075 100);
 }
 
 .dark {
@@ -51,6 +53,7 @@
   --success: oklch(0.72 0.15 158);
   --warning: oklch(0.78 0.14 78);
   --surface: oklch(0.185 0 0);
+  --line-highlight: oklch(0.32 0.05 92);
 }
 
 @theme inline {
@@ -114,17 +117,24 @@
     background-color: transparent !important;
   }
 
+  /*
+   * Fallbacks matter here: the editor paints an unhighlighted <pre class="shiki">
+   * before the grammar loads, and that markup carries none of these variables.
+   */
   .dark .shiki,
   .dark .shiki span {
-    color: var(--shiki-dark) !important;
-    font-style: var(--shiki-dark-font-style) !important;
-    font-weight: var(--shiki-dark-font-weight) !important;
-    text-decoration: var(--shiki-dark-text-decoration) !important;
+    color: var(--shiki-dark, currentColor) !important;
+    font-style: var(--shiki-dark-font-style, inherit) !important;
+    font-weight: var(--shiki-dark-font-weight, inherit) !important;
+    text-decoration: var(--shiki-dark-text-decoration, inherit) !important;
   }
 
   .shiki {
     @apply px-4 font-mono text-[13px] leading-[1.65] sm:px-6;
     counter-reset: shiki-line;
+    /* Width of the number plus its margin, shared by the counter and the
+       invisible link sitting over it. */
+    --code-gutter: calc(3ch + 1rem);
   }
 
   /*
@@ -138,7 +148,7 @@
   }
 
   .shiki .line {
-    @apply min-h-[1.65em] pr-4;
+    @apply relative min-h-[1.65em] pr-4;
   }
 
   /* Gutter drawn with a counter so the numbers can never be copied with the code. */
@@ -150,6 +160,78 @@
 
   .shiki .line:hover::before {
     @apply text-muted-foreground/80;
+  }
+
+  /*
+   * An empty anchor covering the gutter. The number itself stays a CSS counter
+   * so it can never end up in a copied selection; this gives it a click target
+   * and a real link address without putting any text inside the code block.
+   */
+  .shiki .line-link {
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: var(--code-gutter);
+    cursor: pointer;
+  }
+
+  .shiki .line-link:focus-visible {
+    @apply rounded-sm outline-2 outline-offset-[-2px] outline-ring;
+  }
+
+  /* Selected through #L17-L25. Both declarations need !important to beat the
+     blanket transparent background Shiki's own spans carry. */
+  .shiki .line[data-highlighted] {
+    background-color: var(--line-highlight) !important;
+  }
+
+  .shiki .line[data-highlighted]::before {
+    @apply text-muted-foreground;
+  }
+
+  /*
+   * The editor stacks a transparent textarea on a highlighted copy of the same
+   * text. Both layers are driven from this one rule, because two definitions of
+   * the same font, padding and wrapping would drift apart and the caret would
+   * stop landing on the character it appears to be on.
+   */
+  .code-metrics,
+  .editor-layer .shiki {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.65;
+    padding: 1rem;
+    tab-size: 2;
+    letter-spacing: normal;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-break: normal;
+    border: 0;
+  }
+
+  @media (min-width: 640px) {
+    .code-metrics,
+    .editor-layer .shiki {
+      padding-inline: 1.5rem;
+    }
+  }
+
+  /*
+   * No gutter while editing: a wrapped line's continuation cannot line up under
+   * a line number, and the textarea has no way to reproduce that indent.
+   */
+  .editor-layer .shiki .line::before {
+    content: none;
+  }
+
+  /* Any extra inline padding here would wrap the layer earlier than the
+     textarea, which is exactly the drift this pairing has to avoid. */
+  .editor-layer .shiki .line {
+    padding-right: 0;
+  }
+
+  .editor-layer .shiki code {
+    width: 100%;
   }
 }
 

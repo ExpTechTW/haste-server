@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
-import { CopyIcon, FileTextIcon, LinkIcon, PencilIcon, PlusIcon } from "lucide-react"
+import { CopyIcon, DownloadIcon, FileTextIcon, LinkIcon, PlusIcon } from "lucide-react"
 import { toast } from "sonner"
 
 import { CodeView } from "@/components/code-view"
@@ -11,7 +11,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { ApiError, fetchPaste, type Paste } from "@/lib/api"
 import { copyText } from "@/lib/clipboard"
 import { PLAIN, languageLabel } from "@/lib/languages"
-import { formatBytes, formatExpiry } from "@/lib/utils"
+import { clampRange, formatLineHash, parseLineHash, selectLine } from "@/lib/lines"
+import { formatExpiry } from "@/lib/utils"
 
 export function PastePage() {
   const { code = "" } = useParams()
@@ -49,11 +50,32 @@ export function PastePage() {
     }
   }, [code, paste])
 
+  // The fragment is the whole point of a line selection, so a copied link keeps
+  // it: sharing "look at line 42" should not need a second instruction.
+  const lineCount = React.useMemo(
+    () => (paste?.content ? paste.content.split("\n").length : 0),
+    [paste],
+  )
+  const selection = React.useMemo(
+    () => clampRange(parseLineHash(location.hash), lineCount),
+    [location.hash, lineCount],
+  )
+
+  const onSelectLine = React.useCallback(
+    (line: number, extend: boolean) => {
+      // Replace rather than push: a walk down a file should not bury the page
+      // the reader arrived from under fifty history entries.
+      navigate({ hash: formatLineHash(selectLine(selection, line, extend)) }, { replace: true })
+    },
+    [navigate, selection],
+  )
+
   const copyLink = React.useCallback(async () => {
-    const ok = await copyText(paste?.url ?? window.location.href)
-    if (ok) toast.success("Link copied")
+    const base = paste?.url ?? window.location.href.split("#")[0]
+    const ok = await copyText(selection ? base + formatLineHash(selection) : base)
+    if (ok) toast.success(selection ? "Link to lines copied" : "Link copied")
     else toast.error("Could not copy link")
-  }, [paste])
+  }, [paste, selection])
 
   const copyContent = React.useCallback(async () => {
     if (!paste?.content) return
@@ -61,11 +83,6 @@ export function PastePage() {
     if (ok) toast.success("Content copied")
     else toast.error("Could not copy content")
   }, [paste])
-
-  const duplicate = React.useCallback(() => {
-    if (!paste?.content) return
-    navigate("/", { state: { content: paste.content, language: paste.language || PLAIN } })
-  }, [navigate, paste])
 
   // Bare keys rather than chorded shortcuts: nothing on this page takes text
   // input, so there is nothing to collide with.
@@ -81,14 +98,15 @@ export function PastePage() {
         case "n":
           navigate("/")
           break
-        case "d":
-          duplicate()
-          break
         case "c":
           void copyLink()
           break
         case "r":
           if (paste) window.location.href = paste.rawUrl
+          break
+        case "s":
+          // Content-Disposition makes this download rather than navigate.
+          if (paste) window.location.href = paste.downloadUrl
           break
         default:
           return
@@ -98,7 +116,7 @@ export function PastePage() {
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [copyLink, duplicate, navigate, paste])
+  }, [copyLink, navigate, paste])
 
   if (error) {
     return <NotFound code={code} message={error.message} />
@@ -122,8 +140,13 @@ export function PastePage() {
         <IconAction label="View raw" shortcut="R" asLink href={paste?.rawUrl}>
           <FileTextIcon />
         </IconAction>
-        <IconAction label="Duplicate & edit" shortcut="D" onClick={duplicate} disabled={!paste}>
-          <PencilIcon />
+        <IconAction
+          label={paste ? `Download ${paste.filename}` : "Download"}
+          shortcut="S"
+          asLink
+          href={paste?.downloadUrl}
+        >
+          <DownloadIcon />
         </IconAction>
         <IconAction label="New paste" shortcut="N" onClick={() => navigate("/")}>
           <PlusIcon />
@@ -132,7 +155,12 @@ export function PastePage() {
 
       <main className="scrollbar-slim min-h-0 flex-1 overflow-auto bg-surface py-4">
         {paste ? (
-          <CodeView code={paste.content ?? ""} language={paste.language || PLAIN} />
+          <CodeView
+            code={paste.content ?? ""}
+            language={paste.language || PLAIN}
+            selection={selection}
+            onSelectLine={onSelectLine}
+          />
         ) : (
           <LoadingLines />
         )}
@@ -147,19 +175,9 @@ export function PastePage() {
             <span className="text-xs text-muted-foreground">
               {languageLabel(paste.language || PLAIN)}
             </span>
-            <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
+            <span className="text-xs text-muted-foreground tabular-nums">
               {paste.chars.toLocaleString()} chars
             </span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Badge variant="success" className="font-mono tabular-nums">
-                  {paste.ratio.toFixed(1)}×
-                </Badge>
-              </TooltipTrigger>
-              <TooltipContent>
-                {formatBytes(paste.bytes)} stored as {formatBytes(paste.stored)}
-              </TooltipContent>
-            </Tooltip>
             {expiry && (
               <span className="ml-auto text-xs text-muted-foreground">{expiry}</span>
             )}

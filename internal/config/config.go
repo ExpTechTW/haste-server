@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YuYu1015/haste-server/internal/id"
+
 	"github.com/joho/godotenv"
 )
 
@@ -40,7 +42,8 @@ type Config struct {
 	Retention       time.Duration // 0 = keep forever
 	CleanupInterval time.Duration
 
-	IDSecret []byte
+	CodeMinLen int // shortest share code issued
+	IDSecret   []byte
 
 	RateRPS    float64 // sustained paste creations per client IP; 0 = unlimited
 	RateBurst  int
@@ -62,6 +65,7 @@ func Load() (*Config, error) {
 		SQLiteCacheMB: envInt("HASTE_SQLITE_CACHE_MB", 48),
 		MaxChars:      envInt("HASTE_MAX_CHARS", 4000),
 		ZstdLevel:     envInt("HASTE_ZSTD_LEVEL", DefaultZstdLevel),
+		CodeMinLen:    envInt("HASTE_CODE_MIN_LEN", id.DefaultMinLen),
 		RateRPS:       envFloat("HASTE_RATE_RPS", 1),
 		RateBurst:     envInt("HASTE_RATE_BURST", 20),
 		TrustProxy:    envBool("HASTE_TRUST_PROXY", false),
@@ -97,6 +101,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: HASTE_SQLITE_CACHE_MB must be >= 1, got %d", c.SQLiteCacheMB)
 	case c.ReadPool < 1:
 		return fmt.Errorf("config: HASTE_READ_POOL must be >= 1, got %d", c.ReadPool)
+	case c.CodeMinLen < 1 || c.CodeMinLen > id.MaxLen:
+		return fmt.Errorf("config: HASTE_CODE_MIN_LEN must be 1-%d, got %d", id.MaxLen, c.CodeMinLen)
 	case c.Retention < 0:
 		return fmt.Errorf("config: HASTE_RETENTION must not be negative")
 	case c.CleanupInterval <= 0:

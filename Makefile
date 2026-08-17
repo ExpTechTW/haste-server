@@ -23,8 +23,9 @@ test: test-go test-web ## Run all tests
 test-go: ## Run the Go test suite
 	$(GO) test ./...
 
-test-web: ## Typecheck the frontend
+test-web: ## Typecheck the frontend and run its unit tests
 	$(NPM) --prefix web run typecheck
+	$(NPM) --prefix web run test
 
 fmt: ## Format Go sources
 	$(GO) fmt ./...

@@ -21,12 +21,13 @@ export function HeaderBar({ children }: { children?: React.ReactNode }) {
   )
 }
 
+// The visible wordmark is the accessible name here; an aria-label would
+// override it and collide with the New paste action beside it.
 function Brand() {
   return (
     <Link
       to="/"
       className="group flex items-center gap-2 rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      aria-label="New paste"
     >
       <svg viewBox="0 0 32 32" className="size-6 shrink-0" aria-hidden="true">
         <path

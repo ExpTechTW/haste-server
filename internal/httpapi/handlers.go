@@ -22,9 +22,12 @@ type createRequest struct {
 }
 
 type pasteResponse struct {
-	Key       string     `json:"key"`
-	URL       string     `json:"url"`
-	RawURL    string     `json:"rawUrl"`
+	Key         string `json:"key"`
+	URL         string `json:"url"`
+	RawURL      string `json:"rawUrl"`
+	DownloadURL string `json:"downloadUrl"`
+	Filename    string `json:"filename"`
+
 	Language  string     `json:"language,omitempty"`
 	Content   string     `json:"content,omitempty"`
 	Chars     int        `json:"chars"`
@@ -179,19 +182,43 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, content)
 }
 
+// handleDownload serves the paste as a file named after its share code, with
+// the extension its language implies, so a saved paste opens in the right mode.
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	p, content, err := s.store.Get(r.Context(), r.PathValue("code"))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+
+	// Both halves come from values this server controls — a base62 code and a
+	// fixed extension table — so the filename needs no further escaping.
+	filename := p.Code + "." + extensionFor(p.Language)
+
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
+	h.Set("Cache-Control", "public, max-age=300, immutable")
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, content)
+}
+
 // describe renders shared response metadata, including the compression ratio
 // actually achieved for this paste.
 func (s *Server) describe(r *http.Request, p *store.Paste) pasteResponse {
 	base := s.baseURL(r)
 	resp := pasteResponse{
-		Key:       p.Code,
-		URL:       base + "/" + p.Code,
-		RawURL:    base + "/raw/" + p.Code,
-		Language:  p.Language,
-		Chars:     p.Chars,
-		Bytes:     p.RawBytes,
-		Stored:    p.StoredSize,
-		CreatedAt: p.CreatedAt,
+		Key:         p.Code,
+		URL:         base + "/" + p.Code,
+		RawURL:      base + "/raw/" + p.Code,
+		DownloadURL: base + "/download/" + p.Code,
+		Filename:    p.Code + "." + extensionFor(p.Language),
+		Language:    p.Language,
+		Chars:       p.Chars,
+		Bytes:       p.RawBytes,
+		Stored:      p.StoredSize,
+		CreatedAt:   p.CreatedAt,
 	}
 	if p.StoredSize > 0 {
 		resp.Ratio = round2(float64(p.RawBytes) / float64(p.StoredSize))

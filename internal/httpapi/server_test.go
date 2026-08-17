@@ -45,7 +45,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 		MaxChars:  cfg.MaxChars,
 		Retention: cfg.Retention,
 		Codec:     codec,
-		IDs:       id.NewGenerator([]byte("test-secret"), ReservedCodes),
+		IDs:       id.NewGenerator([]byte("test-secret"), id.DefaultMinLen, ReservedCodes),
 	})
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -130,6 +130,51 @@ func TestCreateAndFetch(t *testing.T) {
 	}
 	if !strings.Contains(raw.Header.Get("Content-Security-Policy"), "sandbox") {
 		t.Error("raw response is missing a sandboxing CSP")
+	}
+}
+
+// A download must arrive as a file named after the share code, carrying the
+// extension its language implies.
+func TestDownloadFilename(t *testing.T) {
+	srv := newTestServer(t)
+
+	cases := []struct {
+		language string
+		wantExt  string
+	}{
+		{"dart", "dart"},
+		{"go", "go"},
+		{"python", "py"},
+		{"typescript", "ts"},
+		{"csharp", "cs"},
+		{"", "txt"},         // no language given
+		{"nonsense", "txt"}, // unknown language
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.language, func(t *testing.T) {
+			_, created := postJSON(t, srv, `{"content":"body here","language":"`+tc.language+`"}`)
+			want := created.Key + "." + tc.wantExt
+
+			if created.Filename != want {
+				t.Errorf("filename in response = %q, want %q", created.Filename, want)
+			}
+
+			resp, err := srv.Client().Get(srv.URL + "/download/" + created.Key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+
+			disposition := resp.Header.Get("Content-Disposition")
+			if disposition != `attachment; filename="`+want+`"` {
+				t.Errorf("Content-Disposition = %q, want an attachment named %q", disposition, want)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			if string(body) != "body here" {
+				t.Errorf("downloaded body = %q", body)
+			}
+		})
 	}
 }
 

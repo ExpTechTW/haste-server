@@ -19,7 +19,7 @@ import (
 // refuses to issue any of them, so a share link can never be shadowed by a
 // route — and a future route can never be shadowed by an existing paste.
 var ReservedCodes = []string{
-	"api", "raw", "documents", "assets", "healthz", "health",
+	"api", "raw", "download", "documents", "assets", "healthz", "health",
 	"about", "new", "docs", "static", "index", "favicon", "robots", "manifest",
 }
 
@@ -53,6 +53,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/pastes", s.handleCreate)
 	mux.HandleFunc("GET /api/pastes/{code}", s.handleRead)
 	mux.HandleFunc("GET /raw/{code}", s.handleRaw)
+	mux.HandleFunc("GET /download/{code}", s.handleDownload)
 
 	// haste-server wire compatibility, so existing CLI wrappers keep working.
 	mux.HandleFunc("POST /documents", s.handleLegacyCreate)

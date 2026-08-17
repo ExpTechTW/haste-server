@@ -1,41 +1,24 @@
 import * as React from "react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { FileUpIcon, LoaderCircleIcon, SaveIcon } from "lucide-react"
 import { toast } from "sonner"
 
+import { CodeEditor } from "@/components/code-editor"
+import { AUTO, LanguagePicker } from "@/components/language-picker"
 import { HeaderBar, Kbd, Shell, StatusBar } from "@/components/shell"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useServerConfig } from "@/hooks/use-server-config"
 import { ApiError, createPaste } from "@/lib/api"
-import { prewarm } from "@/lib/highlighter"
-import { LANGUAGES, PLAIN, detectLanguage, languageLabel } from "@/lib/languages"
+import { PLAIN, detectLanguage } from "@/lib/languages"
 import { cn, modKey } from "@/lib/utils"
-
-const AUTO = "auto"
-
-/** Text handed over from a paste being duplicated. */
-interface EditorState {
-  content?: string
-  language?: string
-}
 
 export function EditorPage() {
   const navigate = useNavigate()
-  const location = useLocation()
   const config = useServerConfig()
 
-  const handoff = location.state as EditorState | null
-  const [content, setContent] = React.useState(handoff?.content ?? "")
-  const [choice, setChoice] = React.useState(handoff?.language ?? AUTO)
+  const [content, setContent] = React.useState("")
+  const [choice, setChoice] = React.useState(AUTO)
   const [saving, setSaving] = React.useState(false)
   const [dragging, setDragging] = React.useState(false)
 
@@ -44,12 +27,11 @@ export function EditorPage() {
   const tabExits = React.useRef(false)
 
   // Detection runs against a lagging copy so a fast typist is never blocked by
-  // regex work on every keystroke.
+  // regex work on every keystroke. Highlighting still uses the live value, so
+  // only the language label trails, never the text itself.
   const deferred = React.useDeferredValue(content)
   const detected = React.useMemo(() => detectLanguage(deferred), [deferred])
   const language = choice === AUTO ? detected : choice
-
-  React.useEffect(() => prewarm(language), [language])
 
   // Code points, matching the runes the server counts.
   const chars = React.useMemo(() => Array.from(content).length, [content])
@@ -110,7 +92,6 @@ export function EditorPage() {
   const readFile = async (file: File) => {
     const text = await file.text()
     setContent(text)
-    setChoice(AUTO)
     if (Array.from(text).length > config.maxChars) {
       toast.warning("File is over the limit", {
         description: `Trim it to ${config.maxChars.toLocaleString()} characters before saving.`,
@@ -120,14 +101,10 @@ export function EditorPage() {
 
   return (
     <Shell>
-      <HeaderBar>
-        <Badge variant="secondary" className="mr-1 hidden font-mono sm:inline-flex">
-          zstd-{config.zstdLevel}
-        </Badge>
-      </HeaderBar>
+      <HeaderBar />
 
       <main
-        className="relative min-h-0 flex-1"
+        className="relative min-h-0 flex-1 bg-surface"
         onDragOver={(e) => {
           e.preventDefault()
           setDragging(true)
@@ -140,18 +117,13 @@ export function EditorPage() {
           if (file) void readFile(file)
         }}
       >
-        <textarea
+        <CodeEditor
           value={content}
-          onChange={(e) => setContent(e.target.value)}
+          language={language}
+          onChange={setContent}
           onKeyDown={onTextareaKeyDown}
-          autoFocus
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
           placeholder="Paste your code or logs here…"
-          aria-label="Paste content"
-          aria-invalid={overLimit}
-          className="scrollbar-slim h-full w-full resize-none bg-surface px-4 py-4 font-mono text-[13px] leading-[1.65] outline-none placeholder:text-muted-foreground/60 sm:px-6"
+          invalid={overLimit}
         />
 
         {dragging && (
@@ -182,21 +154,7 @@ export function EditorPage() {
         )}
 
         <div className="ml-auto flex items-center gap-2">
-          <Select value={choice} onValueChange={setChoice}>
-            <SelectTrigger size="sm" className="w-[9.5rem]" aria-label="Syntax highlighting">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={AUTO}>
-                Auto{detected !== PLAIN && ` · ${languageLabel(detected)}`}
-              </SelectItem>
-              {LANGUAGES.map((lang) => (
-                <SelectItem key={lang.id} value={lang.id}>
-                  {lang.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <LanguagePicker value={choice} detected={detected} onChange={setChoice} />
 
           <Tooltip>
             <TooltipTrigger asChild>

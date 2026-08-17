@@ -56,7 +56,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		MaxChars:  cfg.MaxChars,
 		Retention: cfg.Retention,
 		Codec:     codec,
-		IDs:       id.NewGenerator(cfg.IDSecret, httpapi.ReservedCodes),
+		IDs:       id.NewGenerator(cfg.IDSecret, cfg.CodeMinLen, httpapi.ReservedCodes),
 	})
 	if err != nil {
 		return err
@@ -87,6 +87,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			"addr", cfg.Addr,
 			"db", cfg.DBPath,
 			"maxChars", cfg.MaxChars,
+			"codeMinLen", cfg.CodeMinLen,
 			"zstd", cfg.ZstdLevel,
 			"cacheMB", cfg.SQLiteCacheMB,
 			"readPool", cfg.ReadPool,
