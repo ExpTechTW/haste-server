@@ -30,3 +30,54 @@ export function countCodePoints(s: string): number {
   }
   return count
 }
+
+/**
+ * The zone timestamps are shown in.
+ *
+ * Fixed rather than the reader's own: a paste is usually shared alongside a
+ * conversation about when something happened, and a timestamp that reads
+ * differently for each person defeats that. Taipei observes no daylight saving,
+ * so this is UTC+8 all year round.
+ */
+const DISPLAY_TIME_ZONE = "Asia/Taipei"
+
+function partsIn(iso: string, timeZone: string): Record<string, string> | null {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return null
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    // Midnight has to read as 00, not 24.
+    hourCycle: "h23",
+  }).formatToParts(date)
+
+  return Object.fromEntries(parts.map((p) => [p.type, p.value]))
+}
+
+/** Formats an instant as `2026-08-18 05:36:10` in UTC+8. */
+export function formatTimestamp(iso: string): string | null {
+  const p = partsIn(iso, DISPLAY_TIME_ZONE)
+  if (!p) return null
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
+}
+
+/** The same instant without the date, for where a full stamp will not fit. */
+export function formatTimeOfDay(iso: string): string | null {
+  const p = partsIn(iso, DISPLAY_TIME_ZONE)
+  if (!p) return null
+  return `${p.month}-${p.day} ${p.hour}:${p.minute}`
+}
+
+/** Spells out what the displayed time means, for a title attribute. */
+export function describeTimestamp(iso: string): string | null {
+  const local = formatTimestamp(iso)
+  const utc = partsIn(iso, "UTC")
+  if (!local || !utc) return null
+  return `${local} (UTC+8) · ${utc.year}-${utc.month}-${utc.day} ${utc.hour}:${utc.minute}:${utc.second} UTC`
+}

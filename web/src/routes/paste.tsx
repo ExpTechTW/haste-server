@@ -26,6 +26,7 @@ import { ApiError, fetchPaste, type Paste } from "@/lib/api"
 import { copyText } from "@/lib/clipboard"
 import { PLAIN, languageLabel } from "@/lib/languages"
 import { clampRange, formatLineHash, parseLineHash, selectLine } from "@/lib/lines"
+import { describeTimestamp, formatTimeOfDay, formatTimestamp } from "@/lib/utils"
 
 export function PastePage() {
   const { code = "" } = useParams()
@@ -202,9 +203,23 @@ export function PastePage() {
             <span className="text-xs text-muted-foreground">
               {languageLabel(paste.language || PLAIN)}
             </span>
-            <span className="text-xs text-muted-foreground tabular-nums">
+            <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
               {paste.chars.toLocaleString()} chars
             </span>
+            {/*
+              When it was saved is a fact about the paste, unlike a lifetime,
+              which the store cannot promise. Shown in a fixed zone so everyone
+              reading the same link reads the same instant; the title carries
+              the UTC equivalent for anyone who is not in it.
+            */}
+            <time
+              className="ml-auto shrink-0 font-mono text-xs text-muted-foreground tabular-nums"
+              dateTime={paste.createdAt}
+              title={describeTimestamp(paste.createdAt) ?? undefined}
+            >
+              <span className="sm:hidden">{formatTimeOfDay(paste.createdAt)}</span>
+              <span className="hidden sm:inline">{formatTimestamp(paste.createdAt)}</span>
+            </time>
           </>
         ) : (
           <span className="text-xs text-muted-foreground">Loading…</span>
