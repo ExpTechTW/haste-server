@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -60,6 +62,17 @@ func newTestServer(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(New(cfg, st, ui, log).Handler())
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// createBody builds the request envelope through the encoder, because content
+// with newlines in it cannot be pasted into a JSON literal by hand.
+func createBody(t *testing.T, content, language string) string {
+	t.Helper()
+	body, err := json.Marshal(createRequest{Content: content, Language: language})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }
 
 func postJSON(t *testing.T, srv *httptest.Server, body string) (*http.Response, pasteResponse) {
@@ -372,6 +385,167 @@ func TestReservedCodesAreNeverIssued(t *testing.T) {
 		_, created := postJSON(t, srv, `{"content":"x"}`)
 		if _, bad := reserved[strings.ToLower(created.Key)]; bad {
 			t.Fatalf("issued a reserved code: %q", created.Key)
+		}
+	}
+}
+
+// A paste never changes, so a client that already has one should be able to ask
+// for it again without paying for the body twice.
+func TestConditionalGetReturnsNotModified(t *testing.T) {
+	srv := newTestServer(t)
+	_, created := postJSON(t, srv, createBody(t, strings.Repeat("log line\n", 400), "log"))
+
+	for _, path := range []string{
+		"/api/pastes/" + created.Key,
+		"/raw/" + created.Key,
+		"/download/" + created.Key,
+		"/api/config",
+	} {
+		t.Run(path, func(t *testing.T) {
+			first, err := srv.Client().Get(srv.URL + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(first.Body)
+			first.Body.Close()
+
+			tag := first.Header.Get("Etag")
+			if tag == "" {
+				t.Fatal("no ETag on the first response")
+			}
+			if len(body) == 0 {
+				t.Fatal("first response had no body")
+			}
+
+			req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+			req.Header.Set("If-None-Match", tag)
+			second, err := srv.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer second.Body.Close()
+
+			if second.StatusCode != http.StatusNotModified {
+				t.Errorf("status = %d, want 304", second.StatusCode)
+			}
+			if again, _ := io.ReadAll(second.Body); len(again) != 0 {
+				t.Errorf("304 carried %d bytes of body", len(again))
+			}
+		})
+	}
+}
+
+func TestGzip(t *testing.T) {
+	srv := newTestServer(t)
+	content := strings.Repeat("2024-06-01 INFO request completed status=200\n", 80)
+	_, created := postJSON(t, srv, createBody(t, content, "log"))
+
+	get := func(path string, acceptGzip bool) (*http.Response, []byte) {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+		// The stdlib strips the header and decodes transparently unless the
+		// request sets it explicitly, which would hide what went over the wire.
+		if acceptGzip {
+			req.Header.Set("Accept-Encoding", "gzip")
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp, body
+	}
+
+	plain, plainBody := get("/raw/"+created.Key, false)
+	if enc := plain.Header.Get("Content-Encoding"); enc != "" {
+		t.Errorf("unrequested Content-Encoding = %q", enc)
+	}
+	if string(plainBody) != content {
+		t.Fatal("uncompressed body does not match the paste")
+	}
+
+	zipped, zippedBody := get("/raw/"+created.Key, true)
+	if enc := zipped.Header.Get("Content-Encoding"); enc != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", enc)
+	}
+	if !strings.Contains(zipped.Header.Get("Vary"), "Accept-Encoding") {
+		t.Error("a compressed response must Vary on Accept-Encoding")
+	}
+	// Compressing changes the bytes, so the validator has to become weak.
+	if tag := zipped.Header.Get("Etag"); !strings.HasPrefix(tag, `W/"`) {
+		t.Errorf("Etag = %q, want a weak tag on the compressed representation", tag)
+	}
+	if len(zippedBody) >= len(plainBody) {
+		t.Errorf("gzip produced %d bytes for a %d byte body", len(zippedBody), len(plainBody))
+	}
+
+	reader, err := gzip.NewReader(bytes.NewReader(zippedBody))
+	if err != nil {
+		t.Fatalf("response is not valid gzip: %v", err)
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != content {
+		t.Error("decompressed body does not match the paste")
+	}
+	t.Logf("%d B -> %d B (%.1fx)", len(plainBody), len(zippedBody),
+		float64(len(plainBody))/float64(len(zippedBody)))
+}
+
+// Below a few hundred bytes a gzip frame's own header makes the response
+// bigger, so the small ones are left alone.
+func TestSmallResponsesAreNotCompressed(t *testing.T) {
+	srv := newTestServer(t)
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/config", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if enc := resp.Header.Get("Content-Encoding"); enc != "" {
+		t.Errorf("Content-Encoding = %q on a tiny response", enc)
+	}
+	if tag := resp.Header.Get("Etag"); !strings.HasPrefix(tag, `"`) {
+		t.Errorf("Etag = %q, want a strong tag on an uncompressed response", tag)
+	}
+}
+
+// The frontend is embedded, so it has no modification time for a cache to ask
+// about; a content hash is what makes revalidation cheap instead of a re-download.
+func TestStaticAssetsCarryETags(t *testing.T) {
+	srv := newTestServer(t)
+
+	for _, path := range []string{"/assets/app.123.js", "/"} {
+		resp, err := srv.Client().Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag := resp.Header.Get("Etag")
+		resp.Body.Close()
+		if tag == "" {
+			t.Fatalf("%s has no ETag", path)
+		}
+
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+		req.Header.Set("If-None-Match", tag)
+		second, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(second.Body)
+		second.Body.Close()
+
+		if second.StatusCode != http.StatusNotModified {
+			t.Errorf("%s: status = %d, want 304", path, second.StatusCode)
+		}
+		if len(body) != 0 {
+			t.Errorf("%s: 304 carried %d bytes", path, len(body))
 		}
 	}
 }

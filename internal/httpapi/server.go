@@ -3,6 +3,8 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -28,6 +30,7 @@ type Server struct {
 	cfg     *config.Config
 	store   *store.Store
 	ui      fs.FS
+	uiTags  map[string]string
 	log     *slog.Logger
 	limiter *ipLimiter
 }
@@ -38,9 +41,39 @@ func New(cfg *config.Config, st *store.Store, ui fs.FS, log *slog.Logger) *Serve
 		cfg:     cfg,
 		store:   st,
 		ui:      ui,
+		uiTags:  buildETags(ui),
 		log:     log,
 		limiter: newIPLimiter(cfg.RateRPS, cfg.RateBurst),
 	}
+}
+
+// buildETags hashes every embedded file once at startup.
+//
+// Embedded files carry no modification time, so net/http omits Last-Modified
+// and a revalidation has nothing to compare against — every conditional
+// request comes back as a full body. A content hash gives caches something to
+// ask about, which is what turns the frontend's no-cache shell and its
+// short-lived favicon into 304s instead of re-downloads.
+func buildETags(ui fs.FS) map[string]string {
+	tags := make(map[string]string)
+	err := fs.WalkDir(ui, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		body, err := fs.ReadFile(ui, path)
+		if err != nil {
+			return nil
+		}
+		sum := sha256.Sum256(body)
+		// 12 bytes is far past the point where a collision is plausible for a
+		// few dozen files, and keeps the header short.
+		tags[path] = `"` + base64.RawURLEncoding.EncodeToString(sum[:12]) + `"`
+		return nil
+	})
+	if err != nil {
+		return tags
+	}
+	return tags
 }
 
 // Handler returns the fully wrapped HTTP handler.
@@ -48,16 +81,21 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.handleHealth)
-	mux.HandleFunc("GET /api/config", s.handleConfig)
-	mux.HandleFunc("GET /api/stats", s.handleStats)
-	mux.HandleFunc("POST /api/pastes", s.handleCreate)
-	mux.HandleFunc("GET /api/pastes/{code}", s.handleRead)
-	mux.HandleFunc("GET /raw/{code}", s.handleRaw)
-	mux.HandleFunc("GET /download/{code}", s.handleDownload)
+
+	// Everything that returns a body worth caching or compressing goes through
+	// buffered(): it adds the ETag and the gzip. The static handler is left out
+	// on purpose — it already carries build-time tags and serves byte ranges,
+	// which buffering would break.
+	mux.HandleFunc("GET /api/config", buffered(s.handleConfig))
+	mux.HandleFunc("GET /api/stats", buffered(s.handleStats))
+	mux.HandleFunc("POST /api/pastes", buffered(s.handleCreate))
+	mux.HandleFunc("GET /api/pastes/{code}", buffered(s.handleRead))
+	mux.HandleFunc("GET /raw/{code}", buffered(s.handleRaw))
+	mux.HandleFunc("GET /download/{code}", buffered(s.handleDownload))
 
 	// haste-server wire compatibility, so existing CLI wrappers keep working.
-	mux.HandleFunc("POST /documents", s.handleLegacyCreate)
-	mux.HandleFunc("GET /documents/{code}", s.handleLegacyRead)
+	mux.HandleFunc("POST /documents", buffered(s.handleLegacyCreate))
+	mux.HandleFunc("GET /documents/{code}", buffered(s.handleLegacyRead))
 
 	// Everything else is the SPA: static assets when the path names one,
 	// index.html otherwise, which is how /{code} reaches the client router.
@@ -189,6 +227,10 @@ func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Cache-Control", "public, max-age=300")
 	}
+	// ServeContent answers If-None-Match itself once the tag is set.
+	if tag, ok := s.uiTags[name]; ok {
+		w.Header().Set("Etag", tag)
+	}
 	http.ServeContent(w, r, info.Name(), info.ModTime(), rs)
 }
 
@@ -214,6 +256,15 @@ func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		io.WriteString(w, uiMissingPage)
 		return
+	}
+	// no-cache means "revalidate first", not "do not store", so the tag is what
+	// makes that revalidation cheap.
+	if tag, ok := s.uiTags["index.html"]; ok {
+		h.Set("Etag", tag)
+		if match := r.Header.Get("If-None-Match"); match == tag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(b)
