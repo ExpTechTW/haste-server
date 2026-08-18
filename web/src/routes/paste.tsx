@@ -34,9 +34,9 @@ import { describeError } from "@/lib/i18n/errors"
 import { countdown, countdownLong } from "@/lib/expiry"
 import { formatInterval } from "@/components/expiry-picker"
 import { useT } from "@/lib/i18n"
-import { PLAIN } from "@/lib/languages"
+import { PLAIN, detectLanguage } from "@/lib/languages"
 import { clampRange, formatLineHash, parseLineHash, selectLine } from "@/lib/lines"
-import { cn, describeTimestamp, formatTimeOfDay, formatTimestamp } from "@/lib/utils"
+import { describeTimestamp, formatTimeOfDay, formatTimestamp } from "@/lib/utils"
 
 export function PastePage() {
   const { code = "" } = useParams()
@@ -76,13 +76,21 @@ export function PastePage() {
     }
   }, [code, paste])
 
+  // A paste created from a raw body carries no language, so one is worked out
+  // here rather than left as plain text — the same detector the editor runs,
+  // against content that has already stopped changing.
+  const language = React.useMemo(() => {
+    if (!paste) return PLAIN
+    return paste.language || detectLanguage(paste.content ?? "")
+  }, [paste])
+
   // The tab says what the paste is: its name when it has one, otherwise the
   // same summary a link preview would show.
   useDocumentTitle(
     !paste
       ? null
       : paste.title ||
-          `${languageLabel(paste.language || PLAIN)} · ${t("paste.chars", { count: paste.chars.toLocaleString() })}`,
+          `${languageLabel(language)} · ${t("paste.chars", { count: paste.chars.toLocaleString() })}`,
   )
 
   // The fragment is the whole point of a line selection, so a copied link keeps
@@ -217,7 +225,7 @@ export function PastePage() {
         {paste ? (
           <CodeView
             code={paste.content ?? ""}
-            language={paste.language || PLAIN}
+            language={language}
             selection={selection}
             onSelectLine={onSelectLine}
           />
@@ -229,24 +237,20 @@ export function PastePage() {
       <StatusBar>
         {paste ? (
           <>
-            <Badge variant="secondary" className="font-mono">
-              {paste.key}
+            {/*
+              The language, where the share code used to be. The code is in the
+              address bar and one button away from the clipboard, so repeating
+              it here bought nothing; what the reader cannot see for themselves
+              is what the thing they are looking at was taken for.
+            */}
+            <Badge variant="secondary" className="shrink-0">
+              {languageLabel(language)}
             </Badge>
-            {/* The name, when there is one: it says more than the language
-                does, so it gets the room and the language yields on a phone. */}
+            {/* Ellipsised, not wrapped: a long name would otherwise break
+                across lines and grow the whole bar. */}
             {paste.title && (
               <span className="min-w-0 truncate text-xs font-medium">{paste.title}</span>
             )}
-            {/* Ellipsised, not wrapped: a two-word label like "Objective-C"
-                would otherwise break across lines and grow the whole bar. */}
-            <span
-              className={cn(
-                "min-w-0 truncate text-xs text-muted-foreground",
-                paste.title && "hidden sm:inline",
-              )}
-            >
-              {languageLabel(paste.language || PLAIN)}
-            </span>
             <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
               {t("paste.chars", { count: paste.chars.toLocaleString() })}
             </span>

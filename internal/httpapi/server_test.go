@@ -234,7 +234,7 @@ func TestDownloadFilename(t *testing.T) {
 func TestCreateAcceptsRawBody(t *testing.T) {
 	srv := newTestServer(t)
 
-	resp, err := srv.Client().Post(srv.URL+"/api/pastes?language=python", "text/plain", strings.NewReader("print(1)"))
+	resp, err := srv.Client().Post(srv.URL+"/api/pastes", "text/plain", strings.NewReader("print(1)"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,11 +244,13 @@ func TestCreateAcceptsRawBody(t *testing.T) {
 	}
 	var out pasteResponse
 	json.NewDecoder(resp.Body).Decode(&out)
-	if out.Language != "python" {
-		t.Errorf("language = %q, want python", out.Language)
-	}
 	if out.Content != "print(1)" {
 		t.Errorf("content = %q", out.Content)
+	}
+	// A raw body says nothing about its language, and the server does not
+	// guess: the reader detects one when none was stored.
+	if out.Language != "" {
+		t.Errorf("language = %q, want none", out.Language)
 	}
 }
 
@@ -905,11 +907,10 @@ func TestCreateWithALifetime(t *testing.T) {
 		}
 	})
 
-	t.Run("raw body with a duration", func(t *testing.T) {
-		// The raw path has no envelope, so curl passes the lifetime in the query
-		// string — as a duration here, which is what a person types. It still
-		// has to name a rung; 12h does, 2h does not.
-		resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn=12h", "text/plain",
+	t.Run("raw body takes no settings", func(t *testing.T) {
+		// The paste and nothing else: a lifetime for one of these goes in the
+		// envelope, which is what the refusal below tells a caller.
+		resp, err := srv.Client().Post(srv.URL+"/api/pastes", "text/plain",
 			strings.NewReader("temporary"))
 		if err != nil {
 			t.Fatal(err)
@@ -921,11 +922,8 @@ func TestCreateWithALifetime(t *testing.T) {
 		if resp.StatusCode != http.StatusCreated {
 			t.Fatalf("status = %d, want 201", resp.StatusCode)
 		}
-		if out.ExpiresAt == nil {
-			t.Fatal("expiresAt is absent from the response")
-		}
-		if d := time.Until(*out.ExpiresAt); d < 719*time.Minute || d > 12*time.Hour+time.Minute {
-			t.Errorf("expiresAt is %s away, want about twelve hours", d)
+		if out.ExpiresAt != nil {
+			t.Errorf("expiresAt = %s for a raw body that asked for nothing", out.ExpiresAt)
 		}
 	})
 
@@ -970,9 +968,24 @@ func TestCreateRejectsBadLifetimes(t *testing.T) {
 		})
 	}
 
-	for _, q := range []string{"soon", "90m", "2h", "45s"} {
-		t.Run("query string "+q, func(t *testing.T) {
-			resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn="+q, "text/plain",
+}
+
+// A script still passing these would otherwise keep working while quietly
+// dropping the setting — and for a lifetime, silence turns a promise into its
+// opposite.
+func TestCreateRefusesSettingsInTheQueryString(t *testing.T) {
+	srv := newTestServer(t)
+
+	for _, query := range []string{
+		"expiresIn=3600",
+		"expiresIn=6h",
+		"language=python",
+		"title=whatever",
+		// Present but empty still counts: it was still an attempt to set it.
+		"expiresIn=",
+	} {
+		t.Run(query, func(t *testing.T) {
+			resp, err := srv.Client().Post(srv.URL+"/api/pastes?"+query, "text/plain",
 				strings.NewReader("x"))
 			if err != nil {
 				t.Fatal(err)
@@ -983,10 +996,35 @@ func TestCreateRejectsBadLifetimes(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("the json path too", func(t *testing.T) {
+		resp, err := srv.Client().Post(srv.URL+"/api/pastes?title=x", "application/json",
+			strings.NewReader(createBody(t, "content", "")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
+
+	// Anything that was never ours to read is still none of our business.
+	t.Run("an unrelated parameter passes through", func(t *testing.T) {
+		resp, err := srv.Client().Post(srv.URL+"/api/pastes?utm_source=chat", "text/plain",
+			strings.NewReader("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusCreated {
+			t.Errorf("status = %d, want 201", resp.StatusCode)
+		}
+	})
 }
 
-// Every rung has to work through both entry points, or the picker offers
-// something the API refuses.
+// Every rung the picker offers has to be one the API accepts, or the two are
+// describing different servers.
 func TestEveryPublishedLifetimeIsAccepted(t *testing.T) {
 	srv := newTestServer(t)
 
@@ -1006,17 +1044,6 @@ func TestEveryPublishedLifetimeIsAccepted(t *testing.T) {
 			}
 			if off := time.Until(*out.ExpiresAt) - d; off < -time.Minute || off > time.Minute {
 				t.Errorf("expiresAt is %s off the requested %s", off, d)
-			}
-
-			raw, err := srv.Client().Post(
-				fmt.Sprintf("%s/api/pastes?expiresIn=%d", srv.URL, secs), "text/plain",
-				strings.NewReader("x"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer raw.Body.Close()
-			if raw.StatusCode != http.StatusCreated {
-				t.Errorf("raw body: status = %d, want 201", raw.StatusCode)
 			}
 		})
 	}
@@ -1110,41 +1137,6 @@ func TestConfigPublishesTheLifetimeBounds(t *testing.T) {
 	// And the "deletion can lag by one cleanup" note is quoted from this.
 	if cfg.CleanupEverySecs != 3600 {
 		t.Errorf("cleanupEverySecs = %d, want 3600", cfg.CleanupEverySecs)
-	}
-}
-
-// The query string is what a person types at a shell, so it has to accept the
-// spellings the picker's own labels lead them to.
-func TestParseExpiresIn(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want time.Duration
-	}{
-		{"", 0},
-		{"0", 0},
-		{"3600", time.Hour},
-		{"6h", 6 * time.Hour},
-		{"720h", 30 * 24 * time.Hour},
-		// Days: the labels say "7 days" and "30 days", and Go has no unit above
-		// the hour, so this is the spelling that would otherwise be refused.
-		{"1d", 24 * time.Hour},
-		{"7d", 7 * 24 * time.Hour},
-		{"30d", 30 * 24 * time.Hour},
-	} {
-		got, err := parseExpiresIn(tc.in)
-		if err != nil {
-			t.Errorf("parseExpiresIn(%q): %v", tc.in, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("parseExpiresIn(%q) = %s, want %s", tc.in, got, tc.want)
-		}
-	}
-
-	for _, in := range []string{"soon", "tomorrow", "d", "1day", "-", "1.5d", "99999d"} {
-		if _, err := parseExpiresIn(in); err == nil {
-			t.Errorf("parseExpiresIn(%q) was accepted", in)
-		}
 	}
 }
 

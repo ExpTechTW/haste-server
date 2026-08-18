@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -82,8 +83,7 @@ var badExpiryMessage = func() string {
 	for i, n := range expiryOptionsSecs {
 		secs[i] = strconv.FormatInt(n, 10)
 	}
-	return "expiresIn must be 0 (no expiry) or one of " + strings.Join(secs, ", ") +
-		" seconds; the query string also accepts these as durations, e.g. 6h or 30d"
+	return "expiresIn must be 0 (no expiry) or one of " + strings.Join(secs, ", ") + " seconds"
 }()
 
 // badTitleMessage names the limit rather than restating the rule, because the
@@ -251,6 +251,12 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (*store.Paste, s
 		return nil, "", false
 	}
 
+	if name := envelopeOnlyParam(r.URL.Query()); name != "" {
+		writeError(w, http.StatusBadRequest, "bad_request",
+			name+" is set in the JSON request body, not the query string")
+		return nil, "", false
+	}
+
 	var req createRequest
 	// A JSON content type means an envelope; anything else is the paste itself,
 	// which is what `curl --data-binary @file` and the original client send.
@@ -260,18 +266,10 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (*store.Paste, s
 			return nil, "", false
 		}
 	} else {
+		// A raw body is the paste and nothing else. Everything about it — its
+		// title, its language, its lifetime — is set in the JSON envelope,
+		// which is the one place worth looking for it.
 		req.Content = string(body)
-		req.Language = r.URL.Query().Get("language")
-		req.Title = r.URL.Query().Get("title")
-		// The raw path has no envelope to carry a lifetime, so the query string
-		// does: ?expiresIn=1h for a person typing curl, ?expiresIn=3600 for a
-		// script that would rather not build a duration string.
-		ttl, err := parseExpiresIn(r.URL.Query().Get("expiresIn"))
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "bad_expiry", err.Error())
-			return nil, "", false
-		}
-		req.ExpiresIn = int64(ttl.Seconds())
 	}
 
 	p, err := s.store.Create(r.Context(), req.Content, normalizeLanguage(req.Language), req.Title,
@@ -285,34 +283,20 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (*store.Paste, s
 	return p, req.Content, true
 }
 
-// daysRe matches the one duration unit Go does not have.
+// envelopeOnlyParam names a query parameter that used to be honoured here and
+// is now read from the JSON body instead.
 //
-// The picker calls the longer rungs "7 days" and "30 days", so 7d and 30d are
-// what someone reaches for at a shell prompt — and time.ParseDuration rejects
-// both, having no unit above the hour.
-var daysRe = regexp.MustCompile(`^(\d{1,4})d$`)
-
-// parseExpiresIn reads a lifetime written as a plain count of seconds, as a Go
-// duration, or in days. Empty means none was asked for.
-func parseExpiresIn(v string) (time.Duration, error) {
-	if v == "" {
-		return 0, nil
-	}
-	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
-		return time.Duration(secs) * time.Second, nil
-	}
-	if m := daysRe.FindStringSubmatch(v); m != nil {
-		days, err := strconv.Atoi(m[1])
-		if err != nil {
-			return 0, errors.New(badExpiryMessage)
+// Refused rather than ignored. A script still sending ?expiresIn=1h would
+// otherwise keep working while quietly producing pastes that never expire —
+// silence turning a promise into its opposite. Anything else in the query
+// string is left alone; it was never ours to interpret.
+func envelopeOnlyParam(query url.Values) string {
+	for _, name := range [...]string{"title", "language", "expiresIn"} {
+		if query.Has(name) {
+			return name
 		}
-		return time.Duration(days) * 24 * time.Hour, nil
 	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, errors.New(badExpiryMessage)
-	}
-	return d, nil
+	return ""
 }
 
 func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {

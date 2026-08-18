@@ -96,9 +96,8 @@ curl -X POST http://localhost:8080/api/pastes \
   -H 'Content-Type: application/json' \
   -d '{"content":"print(1)","language":"python","title":"prod crash log"}'
 
-# Delete it in six hours. JSON takes expiresIn in seconds; a raw body passes it
-# in the query string, as seconds (21600), hours (6h) or days (30d).
-curl --data-binary @debug.log 'http://localhost:8080/api/pastes?expiresIn=6h'
+# A file straight in — the body is the paste itself, and carries no settings.
+curl --data-binary @debug.log http://localhost:8080/api/pastes
 
 # Read it back
 curl http://localhost:8080/api/pastes/LkKzpZ2q   # JSON, with content
@@ -158,6 +157,13 @@ two cannot disagree about what is on offer.
 | `GET`  | `/healthz`          | Liveness.                                   |
 | `POST` | `/documents`        | Original haste-server protocol.             |
 | `GET`  | `/documents/{key}`  | Original haste-server protocol.             |
+
+Settings are read from the JSON envelope only. `title`, `language` and
+`expiresIn` were once accepted in the query string too and now answer `400`:
+ignoring them silently would leave a script still sending `?expiresIn=1h`
+working while quietly producing pastes that never expire, which turns a promise
+into its opposite. A body sent as anything other than JSON is taken whole as the
+paste, which is what existing CLI wrappers send.
 
 `/documents` speaks the original haste wire format, so existing CLI wrappers
 keep working unchanged.

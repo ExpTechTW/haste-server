@@ -146,7 +146,7 @@ export const en = {
 
   "docs.create.summary": "Create a paste",
   "docs.create.body":
-    "A JSON envelope, or the paste itself as the raw body when the content type is anything else — which is what `curl --data-binary @file` sends.",
+    "A JSON envelope. A body sent as anything other than JSON is taken as the paste itself — what `curl --data-binary @file` sends — and carries no settings; the envelope is the only place those are read from.",
   "docs.read.summary": "Read a paste as JSON",
   "docs.raw.summary": "Read a paste as plain text",
   "docs.download.summary": "Download a paste as a file",
@@ -166,9 +166,6 @@ export const en = {
   "docs.p.language": "Highlighting hint. Omitted or unknown means it is detected on read.",
   "docs.p.expiresIn":
     "Seconds until deletion. 0 or absent means no deletion time. Only the values published by /api/config are accepted.",
-  "docs.p.expiresInQuery":
-    "Same, for a raw body. Accepts seconds (21600), hours (6h) or days (30d).",
-  "docs.p.languageQuery": "Highlighting hint, for a raw body.",
 
   "docs.r.201": "Created. The body is the paste, including its content.",
   "docs.r.200": "The paste.",
@@ -318,7 +315,7 @@ const zhTW: Messages = {
 
   "docs.create.summary": "建立貼文",
   "docs.create.body":
-    "用 JSON 封裝，或在 content type 不是 JSON 時直接把內容當成 body 送 —— 也就是 `curl --data-binary @file` 的行為。",
+    "用 JSON 封裝。content type 不是 JSON 時，body 會整份當成貼文內容 —— 也就是 `curl --data-binary @file` 的行為 —— 且不帶任何設定；設定只從 JSON 封裝讀。",
   "docs.read.summary": "以 JSON 讀取貼文",
   "docs.raw.summary": "以純文字讀取貼文",
   "docs.download.summary": "下載成檔案",
@@ -337,8 +334,6 @@ const zhTW: Messages = {
   "docs.p.title": "選填的名稱，最多 {max} 個字。連結預覽會用它取代自動產生的摘要。",
   "docs.p.language": "上色提示。省略或無法辨識時，讀取時再自動偵測。",
   "docs.p.expiresIn": "幾秒後刪除。0 或省略代表不設刪除時間。只接受 /api/config 發布的那幾個值。",
-  "docs.p.expiresInQuery": "同上，給 raw body 用。可寫秒數（21600）、小時（6h）或天（30d）。",
-  "docs.p.languageQuery": "上色提示，給 raw body 用。",
 
   "docs.r.201": "已建立，回應內容包含貼文本身。",
   "docs.r.200": "貼文。",
@@ -491,7 +486,7 @@ const jaJP: Messages = {
 
   "docs.create.summary": "ペーストを作成",
   "docs.create.body":
-    "JSON で包むか、content type が JSON 以外ならボディそのものを内容として送ります。`curl --data-binary @file` の動作です。",
+    "JSON で包みます。content type が JSON 以外の場合、ボディはペースト本文として扱われ、設定は一切含みません。設定を読むのは JSON の封筒だけです。",
   "docs.read.summary": "ペーストを JSON で取得",
   "docs.raw.summary": "ペーストをプレーンテキストで取得",
   "docs.download.summary": "ファイルとしてダウンロード",
@@ -511,8 +506,6 @@ const jaJP: Messages = {
   "docs.p.language": "ハイライトのヒント。省略または不明な場合は読み込み時に自動判定します。",
   "docs.p.expiresIn":
     "何秒後に削除するか。0 または省略で削除時刻なし。/api/config が公開する値のみ受け付けます。",
-  "docs.p.expiresInQuery": "同上、ボディ直送り用。秒（21600）、時（6h）、日（30d）で指定できます。",
-  "docs.p.languageQuery": "ハイライトのヒント、ボディ直送り用。",
 
   "docs.r.201": "作成しました。ボディにはペースト自体が含まれます。",
   "docs.r.200": "ペースト。",

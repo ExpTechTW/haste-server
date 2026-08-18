@@ -63,11 +63,6 @@ const ENDPOINTS: Endpoint[] = [
     path: "/api/pastes",
     summary: "docs.create.summary",
     note: "docs.create.body",
-    params: [
-      { name: "expiresIn", type: "string", desc: "docs.p.expiresInQuery" },
-      { name: "language", type: "string", desc: "docs.p.languageQuery" },
-      { name: "title", type: "string", desc: "docs.p.title" },
-    ],
     body: [
       { name: "content", type: "string", required: true, desc: "docs.p.content" },
       { name: "title", type: "string", desc: "docs.p.title" },

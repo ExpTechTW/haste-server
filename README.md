@@ -81,9 +81,8 @@ curl -X POST http://localhost:8080/api/pastes \
   -H 'Content-Type: application/json' \
   -d '{"content":"print(1)","language":"python","title":"正式站崩潰紀錄"}'
 
-# 6 小時後刪除。JSON 用 expiresIn（秒）；raw body 走 query string，
-# 秒數（21600）、小時（6h）、天（30d）都收。
-curl --data-binary @debug.log 'http://localhost:8080/api/pastes?expiresIn=6h'
+# 直接送檔案 —— body 就是貼文本身，不帶任何設定。
+curl --data-binary @debug.log http://localhost:8080/api/pastes
 
 # 讀回來
 curl http://localhost:8080/api/pastes/LkKzpZ2q   # JSON，含內容
@@ -135,6 +134,8 @@ curl -OJ http://localhost:8080/download/LkKzpZ2q # -> LkKzpZ2q.dart
 | `GET`  | `/healthz`          | 存活檢查。                            |
 | `POST` | `/documents`        | 原版 haste-server 協定。              |
 | `GET`  | `/documents/{key}`  | 原版 haste-server 協定。              |
+
+設定一律走 JSON 封裝。`title`、`language`、`expiresIn` 曾經也能用 query string 帶，現在會被回 `400` —— 靜靜忽略的話，還在送 `?expiresIn=1h` 的腳本會繼續運作，卻默默產出永不過期的貼文，把一個承諾翻成它的反面。非 JSON 的 body 整份當成貼文內容，這也是既有 CLI 包裝工具的用法。
 
 `/documents` 使用原版 haste 的傳輸格式，既有的 CLI 包裝工具不必改就能繼續用。
 
