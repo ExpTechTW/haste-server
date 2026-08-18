@@ -7,7 +7,7 @@ import { fetchConfig, type ServerConfig } from "@/lib/api"
  * bounded on the very first frame instead of waiting on a round trip.
  */
 const FALLBACK: ServerConfig = {
-  maxChars: 4000,
+  maxChars: 40_000,
 }
 
 // Shared across mounts: the limits cannot change while the tab is open.

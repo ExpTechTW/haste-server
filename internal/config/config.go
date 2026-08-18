@@ -27,10 +27,21 @@ const (
 	MaxZstdLevel = 22
 )
 
-// MinMaxBytes is a floor for the space cap. A 4000-character paste of
-// incompressible CJK costs about 9 KB on disk, so a cap below this would evict
-// every paste the moment it was written.
+// MinMaxBytes is an absolute floor for the space cap. The real floor is
+// derived from HASTE_MAX_CHARS in validate(), because a cap that cannot hold a
+// single maximum-size paste would evict every write the moment it landed.
 const MinMaxBytes = 1 << 20
+
+// DefaultMaxChars is a tenth of the classic haste-server's `maxLength: 400000`,
+// and the difference is deliberate.
+//
+// 40k characters is roughly 300 lines of structured log, 1,500 lines of source,
+// or 40,000 Chinese characters — about thirty A4 pages. It is also, measured on
+// this frontend, the last size at which the editor can still colour the text on
+// every keystroke inside a 16ms frame: 40k costs about 14ms, 60k about 21ms.
+// Past that the editor has to stop highlighting to stay responsive, which is a
+// worse deal than the extra room is worth.
+const DefaultMaxChars = 40_000
 
 // Config is the fully resolved, validated server configuration.
 type Config struct {
@@ -79,7 +90,7 @@ func Load() (*Config, error) {
 		DBPath:        envStr("HASTE_DB_PATH", "data/haste.db"),
 		ReadPool:      envInt("HASTE_READ_POOL", min(runtime.NumCPU(), 8)),
 		SQLiteCacheMB: envInt("HASTE_SQLITE_CACHE_MB", 48),
-		MaxChars:      envInt("HASTE_MAX_CHARS", 4000),
+		MaxChars:      envInt("HASTE_MAX_CHARS", DefaultMaxChars),
 		ZstdLevel:     envInt("HASTE_ZSTD_LEVEL", compress.DefaultLevel),
 		CodeMinLen:    envInt("HASTE_CODE_MIN_LEN", id.DefaultMinLen),
 		// Compression is CPU-bound, so more simultaneous writes than cores buys
@@ -133,9 +144,11 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: HASTE_CODE_MIN_LEN must be 1-%d, got %d", id.MaxLen, c.CodeMinLen)
 	case c.MaxBytes < 0:
 		return fmt.Errorf("config: HASTE_MAX_BYTES must not be negative")
-	// A cap below one worst-case paste would evict every write immediately.
-	case c.MaxBytes > 0 && c.MaxBytes < MinMaxBytes:
-		return fmt.Errorf("config: HASTE_MAX_BYTES must be 0 or at least %d bytes, got %d", MinMaxBytes, c.MaxBytes)
+	// A cap below one worst-case paste would evict every write immediately, so
+	// the floor tracks the character limit rather than sitting at a constant.
+	case c.MaxBytes > 0 && c.MaxBytes < c.minStorageBytes():
+		return fmt.Errorf("config: HASTE_MAX_BYTES must be 0 or at least %d bytes for a %d character limit, got %d",
+			c.minStorageBytes(), c.MaxChars, c.MaxBytes)
 	case c.TTLAccess < 0:
 		return fmt.Errorf("config: HASTE_TTL_ACCESS must not be negative")
 	case c.TTLCreate < 0:
@@ -152,10 +165,34 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// MaxBodyBytes is the hard cap applied to request bodies. A rune is at most 4
-// bytes in UTF-8, plus headroom for the surrounding JSON envelope.
+// minStorageBytes is the smallest cap that can hold one paste of the maximum
+// size. A rune is at most 4 bytes in UTF-8 and compression never meaningfully
+// expands, so that product bounds a single row.
+func (c *Config) minStorageBytes() int64 {
+	floor := int64(c.MaxChars) * 4
+	if floor < MinMaxBytes {
+		return MinMaxBytes
+	}
+	return floor
+}
+
+// bytesPerChar bounds how many request bytes one accepted character may cost.
+//
+// Raw UTF-8 needs at most 4, but JSON lets a client escape any character as
+// \uXXXX, and escaping is not exotic: Python's json.dumps does it by default.
+// One escape is 6 bytes, and a character outside the BMP is written as a
+// surrogate pair — 12 bytes for what MaxChars counts as a single code point.
+//
+// So the body cap has to allow 12, or a full-size CJK paste from a perfectly
+// ordinary API client is rejected as too large before anything ever counts its
+// characters. This is only a guard against unbounded reads; the real limit is
+// still MaxChars, checked after decoding.
+const bytesPerChar = 12
+
+// MaxBodyBytes is the hard cap applied to request bodies: the worst-case
+// encoding of MaxChars characters, plus headroom for the JSON envelope.
 func (c *Config) MaxBodyBytes() int64 {
-	return int64(c.MaxChars)*4 + 4096
+	return int64(c.MaxChars)*bytesPerChar + 4096
 }
 
 // loadIDSecret keys the share-code permutation. It is persisted next to the

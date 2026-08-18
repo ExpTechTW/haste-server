@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,12 +15,18 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/YuYu1015/haste-server/internal/compress"
 	"github.com/YuYu1015/haste-server/internal/config"
 	"github.com/YuYu1015/haste-server/internal/id"
 	"github.com/YuYu1015/haste-server/internal/store"
 )
+
+// maxCharsForTest is the fixture's character limit. Smaller than the shipped
+// default so the suite stays fast; the behaviour under test scales with it.
+const maxCharsForTest = 4000
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -31,7 +38,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	t.Cleanup(codec.Close)
 
 	cfg := &config.Config{
-		MaxChars:    4000,
+		MaxChars:    maxCharsForTest,
 		ZstdLevel:   compress.DefaultLevel,
 		MaxBytes:    16 << 20,
 		CORSOrigins: []string{"*"},
@@ -93,6 +100,23 @@ func postJSON(t *testing.T, srv *httptest.Server, body string) (*http.Response, 
 	var out pasteResponse
 	json.NewDecoder(resp.Body).Decode(&out)
 	return resp, out
+}
+
+func fetchRaw(t *testing.T, srv *httptest.Server, key string) string {
+	t.Helper()
+	resp, err := srv.Client().Get(srv.URL + "/raw/" + key)
+	if err != nil {
+		t.Fatalf("GET /raw/%s: %v", key, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /raw/%s = %d, want 200", key, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }
 
 func TestCreateAndFetch(t *testing.T) {
@@ -688,5 +712,59 @@ func TestPasteResponsesAreNoIndex(t *testing.T) {
 	resp.Body.Close()
 	if tag := resp.Header.Get("X-Robots-Tag"); tag != "" {
 		t.Errorf("the landing page should stay indexable, got %q", tag)
+	}
+}
+
+// TestCreateAcceptsEscapedJSONAtLimit guards the request body cap against being
+// derived from raw UTF-8 alone.
+//
+// MaxChars counts code points, but a client chooses how many bytes each one
+// costs on the wire: JSON permits \uXXXX for any character, and Python's
+// json.dumps emits it by default. A CJK character then costs 6 bytes, and one
+// outside the BMP is written as a surrogate pair costing 12 for what the server
+// counts as a single character. A cap sized at 4 bytes per character rejects
+// both with 413 before anything has counted a single character.
+func TestCreateAcceptsEscapedJSONAtLimit(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Written by hand rather than through json.Marshal, which leaves non-ASCII
+	// as raw UTF-8 and so cannot produce the encoding under test.
+	escape := func(r rune, count int) string {
+		var b strings.Builder
+		b.WriteString(`{"content":"`)
+		for i := 0; i < count; i++ {
+			if r > 0xFFFF {
+				hi, lo := utf16.EncodeRune(r)
+				fmt.Fprintf(&b, `\u%04x\u%04x`, hi, lo)
+				continue
+			}
+			fmt.Fprintf(&b, `\u%04x`, r)
+		}
+		b.WriteString(`"}`)
+		return b.String()
+	}
+
+	for _, tc := range []struct {
+		name string
+		char rune
+	}{
+		{"cjk", '測'},             // 6 bytes escaped
+		{"astral", '\U0001F600'}, // 12 bytes escaped, still one code point
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := escape(tc.char, maxCharsForTest)
+			resp, out := postJSON(t, srv, body)
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("status = %d for a %d byte body of %d characters, want 201",
+					resp.StatusCode, len(body), maxCharsForTest)
+			}
+
+			// And the round trip preserves every character, so widening the cap
+			// did not quietly let a truncated body through.
+			got := fetchRaw(t, srv, out.Key)
+			if n := utf8.RuneCountInString(got); n != maxCharsForTest {
+				t.Fatalf("round trip returned %d characters, want %d", n, maxCharsForTest)
+			}
+		})
 	}
 }

@@ -12,8 +12,12 @@ import (
 	"strings"
 )
 
-// Chars is the character limit these samples are built to fill exactly, so
-// every measurement describes a worst-case paste rather than an average one.
+// Chars is the size every sample is built to exactly.
+//
+// It is not the server's limit — that is ten times larger — but a representative
+// paste, held constant so compression and storage numbers from different runs
+// can be compared. Measuring at the limit instead would make the suites slow
+// without changing what they show.
 const Chars = 4000
 
 // Kind names one flavour of paste.

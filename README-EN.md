@@ -127,7 +127,7 @@ list). Real environment variables override the file.
 | Variable                 | Default          | Notes                                       |
 | ------------------------ | ---------------- | ------------------------------------------- |
 | `HASTE_ADDR`             | `:8080`          | Listen address.                              |
-| `HASTE_MAX_CHARS`        | `4000`           | Unicode code points, not bytes.              |
+| `HASTE_MAX_CHARS`        | `40000`          | Unicode code points, not bytes.              |
 | `HASTE_CODE_MIN_LEN`     | `8`              | Shortest share code, 1–10 base62 characters. |
 | `HASTE_MAX_BYTES`        | `1GiB`           | Hard cap; evicts LRU on write. `0` = none.   |
 | `HASTE_TTL_ACCESS`       | off              | Drop pastes unread for this long.            |
@@ -229,8 +229,24 @@ LRU accuracy, never data. The immutability trigger names the content columns
 explicitly so `accessed_at` remains writable while everything a reader can
 observe stays frozen.
 
-Sizing it is a question of what people paste. Measured on full 4000-character
-pastes, worst case per row:
+The character limit defaults to 40000, a tenth of the classic haste-server's
+`maxLength: 400000`, and the difference is measured rather than arbitrary. That
+is roughly 300 lines of structured log, 1500 lines of source, or 40000 Chinese
+characters — about thirty A4 pages — and it is the last size at which the editor
+can still colour the text on every keystroke inside a 16ms frame: 40k costs
+~14ms, 60k ~21ms, 100k ~37ms. Beyond it the editor has to stop highlighting to
+stay responsive, which is a worse deal than the extra room is worth.
+
+The request body limit is twelve times the character limit, not four. Four bytes
+is the worst case for raw UTF-8, but JSON may escape any character as `\uXXXX`,
+and Python's `json.dumps` does so by default: a Chinese character becomes six
+bytes, and one outside the BMP becomes a surrogate pair costing twelve bytes for
+a single code point. A reverse proxy's `client_max_body_size` has to allow for
+that.
+
+Sizing the cap is a question of what people paste. Measured on 4000-character
+pastes; a full 40000-character log costs about 1 KB, the same in incompressible
+CJK about 85 KB:
 
 | Content                   | Raw    | Stored | On disk | 1 GiB holds |
 | ------------------------- | ------ | ------ | ------- | ----------- |

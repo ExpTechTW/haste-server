@@ -4,6 +4,21 @@ import { ensureHighlighter, highlightSync } from "@/lib/highlighter"
 import { cn } from "@/lib/utils"
 
 /**
+ * Above this many characters the editor stops colouring as you type.
+ *
+ * Highlighting runs synchronously on every render, which is what keeps the
+ * visible text from lagging a frame behind the caret. Measured end to end —
+ * highlighting plus replacing the DOM — a keystroke costs about 14ms at 40k
+ * characters, 21ms at 60k and 37ms at 100k, against a 16ms frame. Past that the
+ * guarantee turns into the very stutter it exists to prevent.
+ *
+ * It sits just above the server's default limit, so in a default deployment it
+ * never fires; it is here for operators who raise HASTE_MAX_CHARS. The text
+ * stays perfectly editable either way, only the colour goes.
+ */
+const LIVE_HIGHLIGHT_LIMIT = 50_000
+
+/**
  * A textarea that shows its content highlighted while you type.
  *
  * A transparent textarea sits exactly on top of a highlighted copy of the same
@@ -43,6 +58,7 @@ export function CodeEditor({
   } | null>(null)
 
   React.useEffect(() => {
+    if (value.length > LIVE_HIGHLIGHT_LIMIT) return
     let cancelled = false
     ensureHighlighter(language)
       .then((shiki) => {
@@ -54,14 +70,20 @@ export function CodeEditor({
     return () => {
       cancelled = true
     }
-  }, [language])
+    // value is read only through the size gate, so this does not re-run per
+    // keystroke — only when the paste crosses the threshold.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [language, value.length > LIVE_HIGHLIGHT_LIMIT])
+
+  const tooLargeToColour = value.length > LIVE_HIGHLIGHT_LIMIT
 
   const html = React.useMemo(() => {
+    if (tooLargeToColour) return null
     if (ready?.language !== language) return null
     // The trailing newline gives the layer the same final empty line the
     // textarea shows, so the two never differ in height by one row.
     return highlightSync(ready.shiki, value + "\n", language)
-  }, [ready, value, language])
+  }, [ready, value, language, tooLargeToColour])
 
   return (
     <div className={cn("scrollbar-slim h-full overflow-auto", className)}>

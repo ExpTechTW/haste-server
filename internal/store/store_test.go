@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/YuYu1015/haste-server/internal/compress"
+	"github.com/YuYu1015/haste-server/internal/corpus"
 	"github.com/YuYu1015/haste-server/internal/id"
 )
 
@@ -511,5 +512,53 @@ func backdate(t *testing.T, st *Store, seq uint64, when time.Time) {
 	t.Helper()
 	if _, err := st.w.Exec(`UPDATE pastes SET accessed_at = ? WHERE seq = ?`, when.Unix(), seq); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The limit matches the classic haste-server's 400000, which is large enough
+// that the paths sized for a few kilobytes have to be exercised at that scale.
+func TestAcceptsAClassicSizedPaste(t *testing.T) {
+	if testing.Short() {
+		t.Skip("compresses 400k characters; slow under -short")
+	}
+
+	const limit = 400_000
+	st := newTestStore(t, func(o *Options) {
+		o.MaxChars = limit
+		// The cap has to admit one maximal paste, or every write evicts itself.
+		o.MaxBytes = 64 << 20
+	})
+	ctx := context.Background()
+
+	var b strings.Builder
+	for i := 0; b.Len() < limit*2; i++ {
+		b.WriteString(corpus.Log(i))
+	}
+	content := string([]rune(b.String())[:limit])
+
+	p, err := st.Create(ctx, content, "log")
+	if err != nil {
+		t.Fatalf("Create at the limit: %v", err)
+	}
+	if p.Chars != limit {
+		t.Errorf("Chars = %d, want %d", p.Chars, limit)
+	}
+
+	got, body, err := st.Get(ctx, p.Code)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if body != content {
+		t.Error("a maximum-size paste did not survive the round trip")
+	}
+	if got.StoredSize >= got.RawBytes {
+		t.Errorf("stored %d B for %d B of input; compression did nothing", got.StoredSize, got.RawBytes)
+	}
+	t.Logf("%d chars: %d B raw -> %d B stored (%.1fx)",
+		limit, got.RawBytes, got.StoredSize, float64(got.RawBytes)/float64(got.StoredSize))
+
+	// One character over is still refused, at the new limit as at the old.
+	if _, err := st.Create(ctx, content+"x", ""); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("one character over the limit: got %v, want ErrTooLarge", err)
 	}
 }
