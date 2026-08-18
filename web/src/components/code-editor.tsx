@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { ensureHighlighter, highlightSync } from "@/lib/highlighter"
+import { useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 /**
@@ -50,6 +51,7 @@ export function CodeEditor({
   invalid?: boolean
   className?: string
 }) {
+  const t = useT()
   const [ready, setReady] = React.useState<{
     shiki: Awaited<ReturnType<typeof ensureHighlighter>>
     language: string
@@ -108,7 +110,7 @@ export function CodeEditor({
           autoCapitalize="off"
           autoCorrect="off"
           autoComplete="off"
-          aria-label="Paste content"
+          aria-label={t("editor.aria")}
           aria-invalid={invalid}
           className="code-metrics caret-foreground absolute inset-0 h-full w-full resize-none overflow-hidden bg-transparent text-transparent outline-none placeholder:text-muted-foreground/60"
         />

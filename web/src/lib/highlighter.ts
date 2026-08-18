@@ -125,7 +125,7 @@ export async function ensureHighlighter(language: string): Promise<HighlighterCo
  * counter, so there is no text inside the code block for a selection to pick
  * up. Copying a highlighted range yields the code alone.
  */
-const lineAnchors = {
+const lineAnchors = (label: LineLabel) => ({
   name: "haste:line-anchors",
   line(node: { properties: Record<string, unknown>; children: unknown[] }, line: number) {
     node.properties.id = `L${line}`
@@ -136,16 +136,22 @@ const lineAnchors = {
       properties: {
         class: "line-link",
         href: `#L${line}`,
-        "aria-label": `Line ${line}`,
+        // The number itself is a CSS counter, so this is the only text a
+        // screen reader has to go on — and the one string in this module that
+        // has to be in the reader's language.
+        "aria-label": label(line),
       },
       children: [],
     })
   },
-}
+})
+
+/** Names a line for assistive technology, in the reader's language. */
+export type LineLabel = (line: number) => string
 
 export interface HighlightOptions {
   /** Adds per-line ids and gutter links, for views that support #L17-L25. */
-  addressable?: boolean
+  addressable?: LineLabel
 }
 
 /**
@@ -164,7 +170,7 @@ export function highlightSync(
     lang,
     themes: THEMES,
     defaultColor: "light",
-    transformers: options.addressable ? [lineAnchors as never] : [],
+    transformers: options.addressable ? [lineAnchors(options.addressable) as never] : [],
   })
 }
 

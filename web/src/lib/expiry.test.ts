@@ -2,53 +2,77 @@ import { describe, expect, it } from "vitest"
 
 import {
   NO_EXPIRY,
+  countdown,
+  countdownLong,
+  countdownParts,
   expiryOption,
   expiryOptions,
-  formatRemaining,
-  formatRemainingShort,
-  remainingParts,
 } from "./expiry"
+import { messages } from "./i18n/messages"
+import type { MessageKey, Translate } from "./i18n"
 
+/** The real dictionaries, so a translation that breaks a format is caught. */
+function translator(locale: string): Translate {
+  const dict = messages[locale]
+  return (key: MessageKey, vars) => {
+    const template = dict[key]
+    if (!vars) return template
+    return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
+      name in vars ? String(vars[name]) : whole,
+    )
+  }
+}
+
+const t = translator("en-US")
 const NOW = Date.parse("2026-08-18T10:00:00Z")
 const inSeconds = (n: number) => new Date(NOW + n * 1000).toISOString()
 
-describe("remainingParts", () => {
-  it("promotes the unit once rounding fills the one below it", () => {
-    // The reason this exists: flooring makes every span read one short the
-    // instant it is chosen, and naive rounding produces "60 minutes".
+describe("countdown", () => {
+  it("shows two units, coarsest first, and seconds only in the last hour", () => {
     const cases: Array<[number, string]> = [
-      [30, "1 minute"],
-      [90, "2 minutes"],
-      [45 * 60, "45 minutes"],
-      [59 * 60 + 40, "1 hour"],
-      [60 * 60, "1 hour"],
-      [6 * 3600 - 1, "6 hours"],
-      [23 * 3600 + 40 * 60, "1 day"],
-      [24 * 3600, "1 day"],
-      [30 * 86400 - 1, "30 days"],
+      [30 * 86400, "30d 0h"],
+      [29 * 86400 + 23 * 3600 + 59 * 60, "29d 23h"],
+      [6 * 3600, "6h 0m"],
+      // A moment after choosing "6 hours": still counting down from it, which
+      // is what a countdown does, rather than misreporting the span.
+      [6 * 3600 - 1, "5h 59m"],
+      [3600, "1h 0m"],
+      [3599, "59:59"],
+      [90, "1:30"],
+      [5, "0:05"],
     ]
     for (const [seconds, want] of cases) {
-      expect(formatRemaining(inSeconds(seconds), NOW), `${seconds}s`).toBe(want)
+      expect(countdown(t, inSeconds(seconds), NOW), `${seconds}s`).toBe(want)
     }
   })
 
-  it("never counts down past zero", () => {
-    expect(remainingParts(inSeconds(0), NOW)).toBeNull()
-    expect(remainingParts(inSeconds(-1), NOW)).toBeNull()
-    expect(formatRemaining(inSeconds(-86400), NOW)).toBeNull()
-  })
-
-  it("returns null rather than NaN for an unparseable instant", () => {
-    expect(remainingParts("not a date", NOW)).toBeNull()
-  })
-
-  it("abbreviates to the same number it spells out", () => {
-    for (const seconds of [90, 45 * 60, 6 * 3600, 3 * 86400]) {
-      const long = formatRemaining(inSeconds(seconds), NOW)!
-      const short = formatRemainingShort(inSeconds(seconds), NOW)!
-      const [count, unit] = long.split(" ")
-      expect(short).toBe(count + unit[0])
+  it("never rounds up", () => {
+    // Rounding up would put a moment on screen that has already gone.
+    for (const seconds of [3599, 86399, 59, 1]) {
+      const parts = countdownParts(inSeconds(seconds), NOW)!
+      const shown = parts.days * 86400 + parts.hours * 3600 + parts.minutes * 60 + parts.seconds
+      expect(shown).toBeLessThanOrEqual(seconds)
     }
+  })
+
+  it("stops rather than going negative", () => {
+    expect(countdown(t, inSeconds(0), NOW)).toBeNull()
+    expect(countdown(t, inSeconds(-1), NOW)).toBeNull()
+    expect(countdownParts("not a date", NOW)).toBeNull()
+  })
+
+  it("spells the same span out for the detail panel", () => {
+    expect(countdownLong(t, inSeconds(6 * 3600 - 1), NOW)).toBe("5 hours 59 minutes")
+    expect(countdownLong(t, inSeconds(90), NOW)).toBe("1 minute 30 seconds")
+    expect(countdownLong(t, inSeconds(2 * 86400), NOW)).toBe("2 days 0 hours")
+  })
+
+  it("counts in the reader's language", () => {
+    const zh = translator("zh-TW")
+    const ja = translator("ja-JP")
+    expect(countdown(zh, inSeconds(6 * 3600 - 1), NOW)).toBe("5小時 59分")
+    expect(countdown(ja, inSeconds(6 * 3600 - 1), NOW)).toBe("5時間 59分")
+    expect(countdownLong(zh, inSeconds(2 * 86400), NOW)).toBe("2 天 0 小時")
   })
 })
 
@@ -58,7 +82,7 @@ describe("the ladder", () => {
   const SERVER = [3600, 21600, 43200, 86400, 259200, 604800, 1209600, 2592000]
 
   it("names each rung the way a person would", () => {
-    expect(expiryOptions(SERVER).map((o) => o.label)).toEqual([
+    expect(expiryOptions(t, SERVER).map((o) => o.label)).toEqual([
       "No expiry",
       "1 hour",
       "6 hours",
@@ -69,20 +93,34 @@ describe("the ladder", () => {
       "14 days",
       "30 days",
     ])
-    expect(expiryOptions(SERVER).map((o) => o.short)).toEqual([
+    expect(expiryOptions(t, SERVER).map((o) => o.short)).toEqual([
       "∞", "1h", "6h", "12h", "1d", "3d", "7d", "14d", "30d",
     ])
   })
 
+  it("names them in the reader's language too", () => {
+    expect(expiryOptions(translator("zh-TW"), [3600, 2592000]).map((o) => o.label)).toEqual([
+      "不限制",
+      "1 小時",
+      "30 天",
+    ])
+    expect(expiryOptions(translator("ja-JP"), [3600, 2592000]).map((o) => o.short)).toEqual([
+      "∞",
+      "1時間",
+      "30日",
+    ])
+  })
+
   it("offers exactly what the server sent, plus no-expiry", () => {
-    const narrow = expiryOptions([21600, 604800])
-    expect(narrow.map((o) => o.seconds)).toEqual([NO_EXPIRY, 21600, 604800])
+    expect(expiryOptions(t, [21600, 604800]).map((o) => o.seconds)).toEqual([
+      NO_EXPIRY, 21600, 604800,
+    ])
     // Not a duration, so a server offering no rungs must still offer this one.
-    expect(expiryOptions([]).map((o) => o.seconds)).toEqual([NO_EXPIRY])
+    expect(expiryOptions(t, []).map((o) => o.seconds)).toEqual([NO_EXPIRY])
   })
 
   it("falls back to hours and minutes for a span that is not whole days", () => {
-    expect(expiryOptions([90 * 60, 2 * 3600]).map((o) => o.label)).toEqual([
+    expect(expiryOptions(t, [90 * 60, 2 * 3600]).map((o) => o.label)).toEqual([
       "No expiry",
       "90 minutes",
       "2 hours",
@@ -92,8 +130,8 @@ describe("the ladder", () => {
   // A value off the ladder is one the API would reject, so the picker must not
   // present it as a live selection.
   it("falls back to no-expiry for a value the server does not offer", () => {
-    expect(expiryOption(12345, SERVER).seconds).toBe(NO_EXPIRY)
-    expect(expiryOption(21600, SERVER).label).toBe("6 hours")
-    expect(expiryOption(NO_EXPIRY, SERVER).label).toBe("No expiry")
+    expect(expiryOption(t, 12345, SERVER).seconds).toBe(NO_EXPIRY)
+    expect(expiryOption(t, 21600, SERVER).label).toBe("6 hours")
+    expect(expiryOption(t, NO_EXPIRY, SERVER).label).toBe("No expiry")
   })
 })

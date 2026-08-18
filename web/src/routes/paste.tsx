@@ -24,9 +24,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useServerConfig } from "@/hooks/use-server-config"
 import { ApiError, fetchPaste, type Paste } from "@/lib/api"
 import { copyText } from "@/lib/clipboard"
-import { formatRemaining, formatRemainingShort } from "@/lib/expiry"
+import { describeError } from "@/lib/i18n/errors"
+import { countdown, countdownLong } from "@/lib/expiry"
+import { formatInterval } from "@/components/expiry-picker"
+import { useT } from "@/lib/i18n"
 import { PLAIN, languageLabel } from "@/lib/languages"
 import { clampRange, formatLineHash, parseLineHash, selectLine } from "@/lib/lines"
 import { describeTimestamp, formatTimeOfDay, formatTimestamp } from "@/lib/utils"
@@ -35,6 +40,7 @@ export function PastePage() {
   const { code = "" } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
+  const t = useT()
 
   // A paste that was just created arrives through router state; anything else
   // has to be fetched.
@@ -90,16 +96,16 @@ export function PastePage() {
   const copyLink = React.useCallback(async () => {
     const base = paste?.url ?? window.location.href.split("#")[0]
     const ok = await copyText(selection ? base + formatLineHash(selection) : base)
-    if (ok) toast.success(selection ? "Link to lines copied" : "Link copied")
-    else toast.error("Could not copy link")
-  }, [paste, selection])
+    if (ok) toast.success(t(selection ? "paste.linesCopied" : "paste.linkCopied"))
+    else toast.error(t("paste.linkCopyFailed"))
+  }, [paste, selection, t])
 
   const copyContent = React.useCallback(async () => {
     if (!paste?.content) return
     const ok = await copyText(paste.content)
-    if (ok) toast.success("Content copied")
-    else toast.error("Could not copy content")
-  }, [paste])
+    if (ok) toast.success(t("paste.contentCopied"))
+    else toast.error(t("paste.contentCopyFailed"))
+  }, [paste, t])
 
   // Bare keys rather than chorded shortcuts: nothing on this page takes text
   // input, so there is nothing to collide with.
@@ -139,13 +145,19 @@ export function PastePage() {
   }, [copyLink, error, navigate, paste])
 
   if (error) {
-    return <NotFound code={code} message={error.message} missing={error.status === 404} />
+    return (
+      <NotFound
+        code={code}
+        message={describeError(t, error, "nf.loadFailed")}
+        missing={error.status === 404}
+      />
+    )
   }
 
   return (
     <Shell>
       <HeaderBar>
-        <IconAction label="Copy link" shortcut="C" onClick={() => void copyLink()}>
+        <IconAction label={t("paste.copyLink")} shortcut="C" onClick={() => void copyLink()}>
           <LinkIcon />
         </IconAction>
 
@@ -158,24 +170,26 @@ export function PastePage() {
         */}
         <span className="hidden sm:contents">
           <IconAction
-            label="Copy content"
+            label={t("paste.copyContent")}
             onClick={() => void copyContent()}
             disabled={!paste?.content}
           >
             <CopyIcon />
           </IconAction>
-          <IconAction label="View raw" shortcut="R" asLink href={paste?.rawUrl}>
+          <IconAction label={t("paste.viewRaw")} shortcut="R" asLink href={paste?.rawUrl}>
             <FileTextIcon />
           </IconAction>
           <IconAction
-            label={paste ? `Download ${paste.filename}` : "Download"}
+            label={
+              paste ? t("paste.downloadNamed", { name: paste.filename }) : t("paste.download")
+            }
             shortcut="S"
             asLink
             href={paste?.downloadUrl}
           >
             <DownloadIcon />
           </IconAction>
-          <IconAction label="New paste" shortcut="N" onClick={() => navigate("/")}>
+          <IconAction label={t("paste.new")} shortcut="N" onClick={() => navigate("/")}>
             <PlusIcon />
           </IconAction>
         </span>
@@ -206,11 +220,13 @@ export function PastePage() {
             <Badge variant="secondary" className="font-mono">
               {paste.key}
             </Badge>
-            <span className="text-xs text-muted-foreground">
+            {/* Ellipsised, not wrapped: a two-word label like "Objective-C"
+                would otherwise break across lines and grow the whole bar. */}
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
               {languageLabel(paste.language || PLAIN)}
             </span>
             <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
-              {paste.chars.toLocaleString()} chars
+              {t("paste.chars", { count: paste.chars.toLocaleString() })}
             </span>
             {/*
               When it was saved is a fact about the paste, unlike a lifetime,
@@ -218,7 +234,7 @@ export function PastePage() {
               reading the same link reads the same instant; the title carries
               the UTC equivalent for anyone who is not in it.
             */}
-            <div className="ml-auto flex shrink-0 items-center gap-3">
+            <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
               {/* Only shown when a lifetime was actually chosen. Its absence is
                   not a promise of permanence, so there is nothing to say. */}
               {paste.expiresAt && <Expiry at={paste.expiresAt} />}
@@ -226,7 +242,7 @@ export function PastePage() {
               <time
                 className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums"
                 dateTime={paste.createdAt}
-                title={describeTimestamp(paste.createdAt) ?? undefined}
+                title={`${t("paste.savedAt")} · ${describeTimestamp(paste.createdAt) ?? ""}`}
               >
                 <span className="sm:hidden">{formatTimeOfDay(paste.createdAt)}</span>
                 <span className="hidden sm:inline">{formatTimestamp(paste.createdAt)}</span>
@@ -234,7 +250,7 @@ export function PastePage() {
             </div>
           </>
         ) : (
-          <span className="text-xs text-muted-foreground">Loading…</span>
+          <span className="text-xs text-muted-foreground">{t("paste.loading")}</span>
         )}
       </StatusBar>
     </Shell>
@@ -251,17 +267,18 @@ function MoreActions({
   onCopyContent: () => void
   onNew: () => void
 }) {
+  const t = useT()
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="More actions" className="sm:hidden">
+        <Button variant="ghost" size="icon-sm" aria-label={t("paste.more")} className="sm:hidden">
           <EllipsisIcon />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
         <DropdownMenuItem onSelect={onCopyContent} disabled={!paste?.content}>
           <CopyIcon />
-          Copy content
+          {t("paste.copyContent")}
         </DropdownMenuItem>
         {paste && (
           <>
@@ -269,13 +286,13 @@ function MoreActions({
             <DropdownMenuItem asChild>
               <a href={paste.rawUrl}>
                 <FileTextIcon />
-                View raw
+                {t("paste.viewRaw")}
               </a>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <a href={paste.downloadUrl}>
                 <DownloadIcon />
-                Download
+                {t("paste.download")}
               </a>
             </DropdownMenuItem>
           </>
@@ -283,7 +300,7 @@ function MoreActions({
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={onNew}>
           <PlusIcon />
-          New paste
+          {t("paste.new")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -350,53 +367,75 @@ function LoadingLines() {
   )
 }
 /**
- * How long this paste has left.
+ * How long this paste has left, and exactly when it goes.
  *
- * Relative rather than absolute, because "6 hours" answers the question a
- * reader actually has; the exact instant is in the tooltip for anyone who needs
- * to plan around it. It ticks so a page left open does not keep claiming six
- * hours an hour later.
+ * The countdown is what a reader wants at a glance, so it is the part that sits
+ * in the bar; the exact instant is a click away rather than a hover, because a
+ * hover is not available on a phone and the instant is the half you need when
+ * you are planning around it.
+ *
+ * It ticks every second. A month-long paste only redraws when the hour changes
+ * — the string is the same until then, and React skips an identical state.
  */
 function Expiry({ at }: { at: string }) {
-  const now = useMinuteTick()
-  const long = formatRemaining(at, now)
-  const short = formatRemainingShort(at, now)
+  const t = useT()
+  const config = useServerConfig()
+  const now = useCountdownTick(at)
+
+  const left = countdown(t, at, now)
+  const long = countdownLong(t, at, now)
 
   return (
-    <span
-      className="flex shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground tabular-nums"
-      title={
-        long
-          ? `Deleted at ${formatTimestamp(at)} (UTC+8). It stops being served then; the bytes go on the next hourly sweep.`
-          : undefined
-      }
-    >
-      <ClockIcon className="size-3.5 shrink-0 opacity-70" />
-      {long ? (
-        <>
-          <span className="sm:hidden">{short}</span>
-          <span className="hidden sm:inline">{long} left</span>
-        </>
-      ) : (
-        // Reached by leaving the tab open past the deadline. The paste is gone
-        // from the server; saying so beats counting down into negative time.
-        <span>expired</span>
-      )}
-    </span>
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 shrink-0 gap-1.5 px-2 font-mono text-xs font-normal tabular-nums text-muted-foreground"
+        >
+          <ClockIcon className="size-3.5 shrink-0 opacity-70" />
+          {left ?? t("paste.expired")}
+        </Button>
+      </PopoverTrigger>
+
+      <PopoverContent align="end" className="w-64 space-y-3 text-sm">
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">{t("paste.expiresAt")}</p>
+          {/* The absolute instant, in the one zone everyone reading this link
+              sees the same. */}
+          <time className="block font-mono tabular-nums" dateTime={at}>
+            {formatTimestamp(at)}
+          </time>
+          <p className="text-xs text-muted-foreground">
+            {long ? t("paste.left", { value: long }) : t("paste.expired")}
+          </p>
+        </div>
+
+        <div className="space-y-1 text-xs leading-relaxed text-muted-foreground">
+          <p>{t("paste.expiryDetail", { interval: formatInterval(t, config.cleanupEverySecs) })}</p>
+          <p>{t("paste.timeZone")}</p>
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
 /**
- * The current time, re-read once a minute.
+ * The current time, re-read as often as the countdown actually changes.
  *
- * A minute is the smallest unit the countdown displays, so anything finer would
- * re-render for no visible change.
+ * Seconds only appear in the last hour of a paste's life; above that the finest
+ * thing on screen is minutes. Ticking every second for a month-long paste would
+ * be 86,400 renders a day that each produce identical markup, so the rate
+ * follows the resolution — and the effect only re-runs on the one crossing.
  */
-function useMinuteTick(): number {
+function useCountdownTick(at: string): number {
   const [now, setNow] = React.useState(() => Date.now())
+  const showingSeconds = new Date(at).getTime() - now < 3_600_000
+
   React.useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000)
+    const id = setInterval(() => setNow(Date.now()), showingSeconds ? 1_000 : 30_000)
     return () => clearInterval(id)
-  }, [])
+  }, [showingSeconds])
+
   return now
 }

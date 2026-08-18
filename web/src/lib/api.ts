@@ -32,6 +32,11 @@ export interface ServerConfig {
    * is what the UI quotes as the removal lag.
    */
   cleanupEverySecs: number
+  /**
+   * The origin this server tells people to call, from HASTE_BASE_URL. Absent
+   * when unset, in which case whichever host you reached is the answer.
+   */
+  baseUrl?: string
 }
 
 /** An error the server described in its JSON envelope. */

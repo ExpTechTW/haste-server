@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { NO_EXPIRY, type ExpiryOption } from "@/lib/expiry"
+import { formatCount, useT, type Translate } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 /**
@@ -33,6 +34,7 @@ export function ExpiryPicker({
   cleanupEverySecs: number
   onChange: (seconds: number) => void
 }) {
+  const t = useT()
   // Read off the same list the menu renders, so the trigger can never name a
   // rung the menu does not have.
   const permanent = value === NO_EXPIRY
@@ -46,7 +48,7 @@ export function ExpiryPicker({
             <Button
               variant="outline"
               size="sm"
-              aria-label={`Expires: ${current.label}`}
+              aria-label={t("expiry.aria", { value: current.label })}
               className="shrink-0 gap-1.5 font-normal tabular-nums"
             >
               {/* The infinity mark is the whole label when nothing expires;
@@ -64,7 +66,9 @@ export function ExpiryPicker({
           </DropdownMenuTrigger>
         </TooltipTrigger>
         <TooltipContent>
-          {permanent ? "No timed deletion" : `Deleted after ${current.label}`}
+          {permanent
+            ? t("expiry.noneHint")
+            : t("expiry.afterHint", { value: current.label })}
         </TooltipContent>
       </Tooltip>
 
@@ -93,8 +97,7 @@ export function ExpiryPicker({
         */}
         <DropdownMenuSeparator />
         <p className="px-2 py-1.5 text-xs leading-relaxed text-muted-foreground">
-          Links die on time. Erasing the data waits for the next cleanup, up to{" "}
-          {formatInterval(cleanupEverySecs)} later.
+          {t("expiry.note", { interval: formatInterval(t, cleanupEverySecs) })}
         </p>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -121,11 +124,9 @@ function Choice({
 }
 
 /** "1 hour", "30 minutes" — the sweep interval as the note reads it. */
-function formatInterval(seconds: number): string {
+export function formatInterval(t: Translate, seconds: number): string {
   if (seconds < 3600) {
-    const minutes = Math.max(Math.round(seconds / 60), 1)
-    return `${minutes} minute${minutes === 1 ? "" : "s"}`
+    return formatCount(t, "minute", Math.max(Math.round(seconds / 60), 1))
   }
-  const hours = Math.round(seconds / 3600)
-  return `${hours} hour${hours === 1 ? "" : "s"}`
+  return formatCount(t, "hour", Math.round(seconds / 3600))
 }

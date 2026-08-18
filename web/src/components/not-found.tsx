@@ -4,6 +4,7 @@ import { ClockIcon, HardDriveIcon, PlusIcon, SearchXIcon } from "lucide-react"
 
 import { HeaderBar, Kbd, Shell } from "@/components/shell"
 import { Button } from "@/components/ui/button"
+import { useT, type MessageKey } from "@/lib/i18n"
 
 /**
  * What a link that leads nowhere looks like.
@@ -24,19 +25,20 @@ export function NotFound({
 }: {
   /** The share code that was asked for; empty when the path was not one. */
   code: string
-  /** What the server said, shown when the failure was not a plain miss. */
+  /** What went wrong, when it was not a plain miss. */
   message: string
   /** True for a genuine 404, false when the request itself failed. */
   missing: boolean
 }) {
   const navigate = useNavigate()
+  const t = useT()
   // A path too deep to be a share code has no code to show, so the address bar
   // is the only thing left that says what was asked for.
   const path = useLocation().pathname
   const asked = code || path
   // Shaped like something a shell printed: lowercase, no full stop. The server's
   // own messages are already written that way; a caller's sentence is not.
-  const reason = missing && code ? "no paste with that code" : lowerFirst(message).replace(/\.$/, "")
+  const reason = missing && code ? t("nf.noPaste") : lowerFirst(message).replace(/\.$/, "")
 
   // Owned here rather than by the page that rendered this, because the
   // catch-all route reaches it without mounting one.
@@ -85,33 +87,25 @@ export function NotFound({
 
           {missing && code ? (
             <div className="space-y-3.5 px-1">
-              <p className="text-sm font-medium">Two things this usually means</p>
-              <Reason icon={<ClockIcon />} title="It was temporary">
-                The paste was saved with a deletion time that has since passed. Ask whoever
-                shared it to post it again.
-              </Reason>
-              <Reason icon={<HardDriveIcon />} title="It was reclaimed">
-                A paste with no deletion time is still not permanent — the least recently
-                opened ones go first when the server runs low on space.
-              </Reason>
+              <p className="text-sm font-medium">{t("nf.reasons")}</p>
+              <Reason icon={<ClockIcon />} title={t("nf.temporary")} body="nf.temporaryBody" />
+              <Reason icon={<HardDriveIcon />} title={t("nf.reclaimed")} body="nf.reclaimedBody" />
             </div>
           ) : (
             <p className="px-1 text-sm text-muted-foreground">
-              {missing
-                ? "That address does not name a paste. Share links are a single code, like /k7Qm2Xp9."
-                : "The paste could not be loaded. It may be worth trying again in a moment."}
+              {t(missing ? "nf.notAPaste" : "nf.loadFailed")}
             </p>
           )}
 
           <div className="flex flex-wrap items-center gap-2 px-1">
             <Button onClick={() => navigate("/")}>
               <PlusIcon />
-              New paste
+              {t("paste.new")}
               <Kbd>N</Kbd>
             </Button>
             {!missing && (
               <Button variant="outline" onClick={() => window.location.reload()}>
-                Try again
+                {t("nf.retry")}
               </Button>
             )}
           </div>
@@ -128,12 +122,13 @@ function lowerFirst(s: string): string {
 function Reason({
   icon,
   title,
-  children,
+  body,
 }: {
   icon: React.ReactNode
   title: string
-  children: React.ReactNode
+  body: MessageKey
 }) {
+  const t = useT()
   return (
     <div className="flex gap-3">
       <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground [&>svg]:size-3.5">
@@ -141,7 +136,7 @@ function Reason({
       </span>
       <p className="text-sm text-muted-foreground">
         <span className="font-medium text-foreground">{title}. </span>
-        {children}
+        {t(body)}
       </p>
     </div>
   )

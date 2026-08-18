@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import { highlight } from "@/lib/highlighter"
+import { useT } from "@/lib/i18n"
 import type { LineRange } from "@/lib/lines"
 
 /**
@@ -23,6 +24,7 @@ export function CodeView({
   /** extend is true when the click should grow the current range. */
   onSelectLine: (line: number, extend: boolean) => void
 }) {
+  const t = useT()
   const [html, setHtml] = React.useState<string | null>(null)
   const containerRef = React.useRef<HTMLDivElement>(null)
   const hasScrolled = React.useRef(false)
@@ -32,7 +34,7 @@ export function CodeView({
     setHtml(null)
     hasScrolled.current = false
 
-    highlight(code, language, { addressable: true })
+    highlight(code, language, { addressable: (n) => t("paste.line", { n }) })
       .then((result) => {
         if (!cancelled) setHtml(result)
       })
@@ -43,7 +45,10 @@ export function CodeView({
     return () => {
       cancelled = true
     }
-  }, [code, language])
+    // t is stable per locale, so this re-highlights on a language switch and
+    // never per render — which it has to, because the gutter's accessible
+    // names are baked into the markup.
+  }, [code, language, t])
 
   // Toggled as an attribute rather than baked into the markup, so changing the
   // selection never costs a re-highlight of the whole document.
@@ -95,7 +100,11 @@ export function CodeView({
               // replaced wholesale the moment highlighting lands.
               // eslint-disable-next-line react/no-array-index-key
               <span className="line" data-line={index + 1} key={index}>
-                <a className="line-link" href={`#L${index + 1}`} aria-label={`Line ${index + 1}`} />
+                <a
+                  className="line-link"
+                  href={`#L${index + 1}`}
+                  aria-label={t("paste.line", { n: index + 1 })}
+                />
                 {line}
               </span>
             ))}

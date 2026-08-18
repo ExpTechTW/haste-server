@@ -9,8 +9,11 @@ endpoints, and the React frontend all embedded.
 
 - **Short hash-style codes that never collide** — `k7Qm2Xp9`, not `1`, `2`, `3`.
 - **Write-once.** There is no edit or delete path, and the database enforces it.
-- **Temporary pastes on request** — an hour to thirty days. Asking for nothing
-  means no timed deletion, which is not the same as being kept.
+- **Temporary pastes on request** — an hour to thirty days, with a live
+  countdown and the exact UTC+8 instant. Asking for nothing means no timed
+  deletion, which is not the same as being kept.
+- **English, 繁體中文 and 日本語**, detected from the browser and switchable.
+- **A built-in API reference** at `/docs`, with every endpoint runnable.
 - **A byte cap, not a promise.** Storage is bounded on every write; apart from a
   lifetime you asked for, nothing advertises a span the server cannot honour.
 - **Line links** — `#L17-L25`, addressed and shared the way GitHub does it.
@@ -53,6 +56,8 @@ make dev-web  # UI on :5173
 | ------ | --- |
 | Save | `⌘/Ctrl + S`, or the Save button |
 | Set a lifetime | The clock menu in the status bar — 1h to 30d, or none |
+| See when it expires | Click the countdown — it shows the exact UTC+8 instant |
+| Change language | The 文/A button in the header |
 | Load a file | Drop it onto the editor |
 | Select a line | Click its number → `#L17` |
 | Select a range | Shift-click another number → `#L17-L25` |
@@ -145,6 +150,10 @@ two cannot disagree about what is on offer.
 `/documents` speaks the original haste wire format, so existing CLI wrappers
 keep working unchanged.
 
+The same reference is interactive at `/docs`: every endpoint expands to its
+parameters, responses and a curl example, and can be run against the server you
+are looking at.
+
 Errors come back as `{"error": "code", "message": "..."}` with a matching
 status: `400` empty or malformed, `413` over the limit, `429` rate limited,
 `503` write queue full, `404` unknown or already evicted.
@@ -169,7 +178,7 @@ list). Real environment variables override the file.
 | `HASTE_SQLITE_CACHE_MB`  | `48`             | Page cache **per connection**.               |
 | `HASTE_READ_POOL`        | `min(NumCPU, 8)` | Read connections; the writer is always 1.    |
 | `HASTE_RATE_RPS`         | `1`              | Creations per IP per second; `0` disables.   |
-| `HASTE_BASE_URL`         | derived          | Set when behind a proxy.                     |
+| `HASTE_BASE_URL`         | derived          | Set when behind a proxy; also the base URL shown at `/docs`. |
 | `HASTE_TRUST_PROXY`      | `false`          | Enable only behind a proxy you control.      |
 
 ## How it works

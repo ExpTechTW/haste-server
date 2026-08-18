@@ -11,6 +11,7 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useT } from "@/lib/i18n"
 import { LANGUAGES, PLAIN, languageLabel } from "@/lib/languages"
 import { cn } from "@/lib/utils"
 
@@ -32,14 +33,15 @@ export function LanguagePicker({
   onChange: (value: string) => void
 }) {
   const [open, setOpen] = React.useState(false)
+  const t = useT()
 
   // "Auto(Dart)" rather than "Auto · Dart": short enough to say both things at
   // any width, so the phone no longer has to drop half of it.
   const label =
     value === AUTO
       ? detected === PLAIN
-        ? "Auto"
-        : `Auto(${languageLabel(detected)})`
+        ? t("lang.auto")
+        : `${t("lang.auto")}(${languageLabel(detected)})`
       : languageLabel(value)
 
   const select = (next: string) => {
@@ -55,7 +57,7 @@ export function LanguagePicker({
           size="sm"
           role="combobox"
           aria-expanded={open}
-          aria-label="Syntax highlighting"
+          aria-label={t("lang.aria")}
           // Allowed to shrink: the character counter grows as a paste fills up, and
           // this is what keeps the row from wrapping when it does.
           className="w-[7.5rem] min-w-18 shrink justify-between font-normal sm:w-[11rem]"
@@ -76,15 +78,15 @@ export function LanguagePicker({
             return haystack.includes(needle) ? 0.5 : 0
           }}
         >
-          <CommandInput placeholder="Search languages…" />
+          <CommandInput placeholder={t("lang.search")} />
           <CommandList>
-            <CommandEmpty>No language found.</CommandEmpty>
+            <CommandEmpty>{t("lang.empty")}</CommandEmpty>
 
             <CommandGroup>
               <CommandItem value={AUTO} keywords={["automatic", "detect"]} onSelect={select}>
                 <WandSparklesIcon className="opacity-60" />
                 <span className="flex-1 truncate">
-                  Auto
+                  {t("lang.auto")}
                   {detected !== PLAIN && (
                     <span className="text-muted-foreground">({languageLabel(detected)})</span>
                   )}

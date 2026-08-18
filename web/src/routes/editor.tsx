@@ -17,14 +17,17 @@ import { HeaderBar, Kbd, Shell, StatusBar } from "@/components/shell"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useServerConfig } from "@/hooks/use-server-config"
-import { ApiError, createPaste } from "@/lib/api"
+import { createPaste } from "@/lib/api"
 import { NO_EXPIRY, expiryOptions } from "@/lib/expiry"
+import { useT, type Translate } from "@/lib/i18n"
+import { describeError } from "@/lib/i18n/errors"
 import { PLAIN, detectLanguage } from "@/lib/languages"
 import { cn, countCodePoints, modKey } from "@/lib/utils"
 
 export function EditorPage() {
   const navigate = useNavigate()
   const config = useServerConfig()
+  const t = useT()
 
   const [content, setContent] = React.useState("")
   const [choice, setChoice] = React.useState(AUTO)
@@ -44,8 +47,8 @@ export function EditorPage() {
   const language = choice === AUTO ? detected : choice
 
   const expiries = React.useMemo(
-    () => expiryOptions(config.expiryOptionsSecs),
-    [config.expiryOptionsSecs],
+    () => expiryOptions(t, config.expiryOptionsSecs),
+    [t, config.expiryOptionsSecs],
   )
 
   // The ladder arrives from the server, so a value chosen against the fallback
@@ -72,21 +75,18 @@ export function EditorPage() {
       // which is the one thing the store cannot promise. Said once, at the
       // moment the choice takes effect, rather than as standing small print.
       if (expiresIn === NO_EXPIRY) {
-        toast.info("Saved without an expiry", {
-          description:
-            "No deletion time was set. That is not a promise to keep it: pastes are removed when the server needs the space.",
-        })
+        toast.info(t("editor.noExpiry"), { description: t("editor.noExpiryBody") })
       }
       // Hand the created paste forward so the next view renders without a
       // second round trip.
       navigate(`/${paste.key}`, { state: { paste } })
     } catch (error) {
-      const message =
-        error instanceof ApiError ? error.message : "Something went wrong while saving."
-      toast.error("Could not save paste", { description: message })
+      toast.error(t("editor.saveFailed"), {
+        description: describeError(t, error, "editor.saveFailedBody"),
+      })
       setSaving(false)
     }
-  }, [content, empty, expiresIn, language, navigate, overLimit, saving])
+  }, [content, empty, expiresIn, language, navigate, overLimit, saving, t])
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -126,8 +126,8 @@ export function EditorPage() {
     const text = await file.text()
     setContent(text)
     if (countCodePoints(text) > config.maxChars) {
-      toast.warning("File is over the limit", {
-        description: `Trim it to ${config.maxChars.toLocaleString()} characters before saving.`,
+      toast.warning(t("editor.fileTooBig"), {
+        description: t("editor.fileTooBigBody", { max: config.maxChars.toLocaleString() }),
       })
     }
   }
@@ -158,13 +158,13 @@ export function EditorPage() {
           invalid={overLimit}
         />
 
-        {empty && !dragging && <Welcome maxChars={config.maxChars} />}
+        {empty && !dragging && <Welcome t={t} maxChars={config.maxChars} />}
 
         {dragging && (
           <div className="pointer-events-none absolute inset-3 flex items-center justify-center rounded-lg border-2 border-dashed border-ring bg-background/85 backdrop-blur-[1px]">
             <div className="flex items-center gap-2 text-sm font-medium">
               <FileUpIcon className="size-4" />
-              Drop a file to load it
+              {t("editor.dropzone")}
             </div>
           </div>
         )}
@@ -200,16 +200,16 @@ export function EditorPage() {
                   ) : (
                     <SaveIcon />
                   )}
-                  Save
+                  {t("editor.save")}
                 </Button>
               </span>
             </TooltipTrigger>
             <TooltipContent>
               {overLimit ? (
-                `Over the ${config.maxChars.toLocaleString()} character limit`
+                t("editor.overLimit", { max: config.maxChars.toLocaleString() })
               ) : (
                 <span className="flex items-center gap-1.5">
-                  Save <Kbd>{modKey()}S</Kbd>
+                  {t("editor.save")} <Kbd>{modKey()}S</Kbd>
                 </span>
               )}
             </TooltipContent>
@@ -229,7 +229,7 @@ export function EditorPage() {
  * caret in the editor underneath — the point of the page is that you can start
  * typing without deciding anything first.
  */
-function Welcome({ maxChars }: { maxChars: number }) {
+function Welcome({ t, maxChars }: { t: Translate; maxChars: number }) {
   return (
     <div
       aria-hidden="true"
@@ -242,26 +242,24 @@ function Welcome({ maxChars }: { maxChars: number }) {
       <div className="relative flex flex-col items-center gap-6 text-center">
         <div className="space-y-2.5">
           <h1 className="font-mono text-4xl font-semibold tracking-tight sm:text-5xl">haste</h1>
-          <p className="text-sm text-muted-foreground sm:text-base">
-            Paste code or logs. Get a short link back.
-          </p>
+          <p className="text-sm text-muted-foreground sm:text-base">{t("editor.tagline")}</p>
         </div>
 
         {/* Dropped on a short viewport before the wordmark is: the hints are
             the part you can do without once you have seen them. */}
         <div className="hidden flex-wrap items-center justify-center gap-2 min-[400px]:flex">
-          <Hint icon={<KeyboardIcon />}>Start typing</Hint>
-          <Hint icon={<FileUpIcon />}>Drop a file</Hint>
+          <Hint icon={<KeyboardIcon />}>{t("editor.hint.type")}</Hint>
+          <Hint icon={<FileUpIcon />}>{t("editor.hint.drop")}</Hint>
           <Hint icon={<CornerDownLeftIcon />}>
             <span className="flex items-center gap-1.5">
-              <Kbd>{modKey()}S</Kbd> to save
+              <Kbd>{modKey()}S</Kbd> {t("editor.hint.save")}
             </span>
           </Hint>
         </div>
 
         <p className="flex items-center gap-1.5 text-xs text-muted-foreground/80">
           <ScrollTextIcon className="size-3.5" />
-          Up to {maxChars.toLocaleString()} characters, highlighted as you type
+          {t("editor.hint.limit", { max: maxChars.toLocaleString() })}
         </p>
       </div>
     </div>

@@ -83,16 +83,25 @@ var badExpiryMessage = func() string {
 //
 // The lifetime ladder is published rather than described, so the picker is
 // built from the same list Create validates against and the two cannot disagree
-// about what is on offer. No default retention is published, because a paste
+// about what is on offer. The base URL is published so the API reference can
+// show the address people should actually call, which behind a proxy is not the
+// one the browser happens to be on. No default retention is published, because a paste
 // that asks for nothing gets no promise: the storage cap can reclaim it
 // whenever it needs the bytes.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	writeJSON(w, http.StatusOK, map[string]any{
+	cfg := map[string]any{
 		"maxChars":          s.cfg.MaxChars,
 		"expiryOptionsSecs": expiryOptionsSecs,
 		"cleanupEverySecs":  int64(s.cfg.CleanupInterval.Seconds()),
-	})
+	}
+	// Only when an operator has actually declared one. Deriving it from the
+	// request instead would make this response vary by Host while the cache
+	// keys it by path alone, and the client can read its own origin anyway.
+	if s.cfg.BaseURL != "" {
+		cfg["baseUrl"] = s.cfg.BaseURL
+	}
+	writeJSON(w, http.StatusOK, cfg)
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

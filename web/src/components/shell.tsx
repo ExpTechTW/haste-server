@@ -1,10 +1,14 @@
 import * as React from "react"
 import { Link } from "react-router-dom"
 
+import { BookTextIcon } from "lucide-react"
+
 import { GitHubIcon } from "@/components/icons"
+import { LocaleToggle } from "@/components/locale-toggle"
 import { ModeToggle } from "@/components/mode-toggle"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
 const ORGANISATION = "ExpTech Studio"
@@ -22,7 +26,9 @@ export function HeaderBar({ children }: { children?: React.ReactNode }) {
       <Brand />
       <div className="ml-auto flex items-center gap-1">
         {children}
+        <DocsLink />
         <GitHubLink />
+        <LocaleToggle />
         <ModeToggle />
       </div>
     </header>
@@ -63,22 +69,36 @@ function Brand() {
   )
 }
 
-function GitHubLink() {
+function DocsLink() {
+  const t = useT()
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          asChild
-          aria-label={`${ORGANISATION} on GitHub`}
-        >
+        <Button variant="ghost" size="icon-sm" asChild aria-label={t("nav.docs")}>
+          {/* A client route: the reference is part of the app, not a file. */}
+          <Link to="/docs">
+            <BookTextIcon className="size-4" />
+          </Link>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{t("nav.docs")}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+function GitHubLink() {
+  const t = useT()
+  const label = t("nav.github", { org: ORGANISATION })
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="ghost" size="icon-sm" asChild aria-label={label}>
           <a href={REPOSITORY} target="_blank" rel="noreferrer">
             <GitHubIcon className="size-4" />
           </a>
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{ORGANISATION} on GitHub</TooltipContent>
+      <TooltipContent>{label}</TooltipContent>
     </Tooltip>
   )
 }
