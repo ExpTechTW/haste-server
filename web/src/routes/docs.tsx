@@ -43,6 +43,20 @@ interface Endpoint {
  * project has no use for, at the cost of a second description of the same
  * server that could drift from the handlers just as easily.
  */
+/**
+ * The corpus totals, listed only where they are actually served.
+ *
+ * The endpoint is off unless an operator opened it, and documenting a route
+ * that answers 404 is worse than saying nothing — it invites guessing at a
+ * token that a reader is not meant to have.
+ */
+const STATS: Endpoint = {
+  method: "GET",
+  path: "/api/stats",
+  summary: "docs.stats.summary",
+  responses: [[200, "docs.r.200stats"]],
+}
+
 const ENDPOINTS: Endpoint[] = [
   {
     method: "POST",
@@ -107,12 +121,6 @@ const ENDPOINTS: Endpoint[] = [
   },
   {
     method: "GET",
-    path: "/api/stats",
-    summary: "docs.stats.summary",
-    responses: [[200, "docs.r.200stats"]],
-  },
-  {
-    method: "GET",
     path: "/healthz",
     summary: "docs.health.summary",
     responses: [[200, "docs.r.200ok"]],
@@ -149,6 +157,7 @@ export function DocsPage() {
   // What people should call, which behind a proxy is not the host the browser
   // is on. Falls back to that host only when the operator has declared nothing.
   const baseUrl = config.baseUrl || window.location.origin
+  const endpoints = config.statsPublic ? [...ENDPOINTS, STATS] : ENDPOINTS
 
   return (
     <Shell>
@@ -164,7 +173,7 @@ export function DocsPage() {
           <BaseUrl url={baseUrl} />
 
           <div className="overflow-hidden rounded-xl border bg-background">
-            {ENDPOINTS.map((endpoint, i) => (
+            {endpoints.map((endpoint, i) => (
               <Row
                 key={endpoint.method + endpoint.path}
                 endpoint={endpoint}
@@ -199,7 +208,6 @@ function BaseUrl({ url }: { url: string }) {
         </code>
         <CopyButton value={url} />
       </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">{t("docs.baseUrlNote")}</p>
     </div>
   )
 }

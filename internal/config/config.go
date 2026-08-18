@@ -32,6 +32,11 @@ const (
 // single maximum-size paste would evict every write the moment it landed.
 const MinMaxBytes = 1 << 20
 
+// MinStatsTokenLen keeps a token from being guessable. The endpoint is not rate
+// limited for an authorized caller, so a four-character token would be a
+// formality rather than a control.
+const MinStatsTokenLen = 16
+
 // DefaultMaxChars is a tenth of the classic haste-server's `maxLength: 400000`,
 // and the difference is deliberate.
 //
@@ -77,7 +82,31 @@ type Config struct {
 	TrustProxy bool // honour X-Forwarded-For / X-Real-IP when rate limiting
 
 	CORSOrigins []string // "*" allows any origin
+
+	// Stats is an operational endpoint, not a public one, and it is off unless
+	// an operator says otherwise. See StatsMode.
+	Stats      StatsMode
+	StatsToken string
 }
+
+// StatsMode decides who, if anyone, may read /api/stats.
+//
+// Off by default because the numbers are far more useful to someone attacking
+// the instance than to anyone using it. The corpus totals move by exactly one
+// paste at a time, so polling them reveals the size of every paste as it
+// arrives; usedFraction turns filling the storage cap into a task with a
+// progress bar; and a falling count confirms that other people's pastes are
+// being evicted. None of that is information a stranger needs.
+type StatsMode string
+
+const (
+	// StatsOff answers 404, as if the route did not exist.
+	StatsOff StatsMode = "off"
+	// StatsToken requires a bearer token, for a monitoring system.
+	StatsToken StatsMode = "token"
+	// StatsPublic serves it to anyone, which is a deliberate choice.
+	StatsPublic StatsMode = "public"
+)
 
 // Load reads configuration, applying defaults for everything that is unset.
 func Load() (*Config, error) {
@@ -115,6 +144,9 @@ func Load() (*Config, error) {
 	if cfg.TTLCreate, err = envDur("HASTE_TTL_CREATE", "0"); err != nil {
 		return nil, err
 	}
+	cfg.Stats = StatsMode(strings.ToLower(strings.TrimSpace(envStr("HASTE_STATS", string(StatsOff)))))
+	cfg.StatsToken = envStr("HASTE_STATS_TOKEN", "")
+
 	if cfg.CleanupInterval, err = envDur("HASTE_CLEANUP_INTERVAL", "1h"); err != nil {
 		return nil, err
 	}
@@ -153,6 +185,10 @@ func (c *Config) validate() error {
 		return fmt.Errorf("config: HASTE_TTL_ACCESS must not be negative")
 	case c.TTLCreate < 0:
 		return fmt.Errorf("config: HASTE_TTL_CREATE must not be negative")
+	case c.Stats != StatsOff && c.Stats != StatsToken && c.Stats != StatsPublic:
+		return fmt.Errorf("config: HASTE_STATS must be off, token or public, got %q", c.Stats)
+	case c.Stats == StatsToken && len(c.StatsToken) < MinStatsTokenLen:
+		return fmt.Errorf("config: HASTE_STATS=token needs a HASTE_STATS_TOKEN of at least %d characters", MinStatsTokenLen)
 	case c.CleanupInterval <= 0:
 		return fmt.Errorf("config: HASTE_CLEANUP_INTERVAL must be > 0")
 	case c.WriteConcurrency < 0:

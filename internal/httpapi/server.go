@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/YuYu1015/haste-server/internal/config"
@@ -35,6 +36,11 @@ type Server struct {
 	shell   shell
 	log     *slog.Logger
 	limiter *ipLimiter
+
+	// The stats scan is O(rows); this holds the last one for statsCacheFor.
+	statsMu    sync.Mutex
+	statsAt    time.Time
+	statsValue store.Stats
 }
 
 // New builds the server. ui is the root of the built frontend.

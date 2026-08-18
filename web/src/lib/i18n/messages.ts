@@ -113,8 +113,6 @@ export const en = {
   "docs.title": "API",
   "docs.subtitle": "Everything the server answers, and what it answers with.",
   "docs.baseUrl": "Base URL",
-  "docs.baseUrlNote":
-    "Set by HASTE_BASE_URL on the server. Unset, it falls back to whichever host you reached.",
   "docs.copied": "Copied",
   "docs.parameters": "Parameters",
   "docs.requestBody": "Request body",
@@ -272,7 +270,6 @@ const zhTW: Messages = {
   "docs.title": "API",
   "docs.subtitle": "伺服器提供的所有端點，以及它們的回應。",
   "docs.baseUrl": "Base URL",
-  "docs.baseUrlNote": "由伺服器的 HASTE_BASE_URL 設定；未設定時會退回你連進來的那個主機。",
   "docs.copied": "已複製",
   "docs.parameters": "參數",
   "docs.requestBody": "請求內容",
@@ -430,8 +427,6 @@ const jaJP: Messages = {
   "docs.title": "API",
   "docs.subtitle": "サーバーが応答するすべてのエンドポイントと、その戻り値。",
   "docs.baseUrl": "ベース URL",
-  "docs.baseUrlNote":
-    "サーバーの HASTE_BASE_URL で設定します。未設定の場合は接続したホストが使われます。",
   "docs.copied": "コピーしました",
   "docs.parameters": "パラメータ",
   "docs.requestBody": "リクエストボディ",

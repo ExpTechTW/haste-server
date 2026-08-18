@@ -142,13 +142,20 @@ two cannot disagree about what is on offer.
 | `GET`  | `/raw/{key}`        | Read as `text/plain`.                       |
 | `GET`  | `/download/{key}`   | Download as `{key}.{ext}` for its language. |
 | `GET`  | `/api/config`       | Limits the server enforces.                 |
-| `GET`  | `/api/stats`        | Live count, corpus ratio, and cap usage.    |
+| `GET`  | `/api/stats`        | Live count, corpus ratio, cap usage. **Off by default.** |
 | `GET`  | `/healthz`          | Liveness.                                   |
 | `POST` | `/documents`        | Original haste-server protocol.             |
 | `GET`  | `/documents/{key}`  | Original haste-server protocol.             |
 
 `/documents` speaks the original haste wire format, so existing CLI wrappers
 keep working unchanged.
+
+`/api/stats` answers 404 unless it is turned on. It is an operational endpoint
+rather than a public one: the totals move one paste at a time, so polling them
+reveals the size of every paste as it arrives; `usedFraction` turns filling the
+storage cap into a task with a progress bar; and a falling `count` is a receipt
+confirming other people's pastes have been evicted. Open it with
+`HASTE_STATS=token` (plus `HASTE_STATS_TOKEN`) or `HASTE_STATS=public`.
 
 The same reference is interactive at `/docs`: every endpoint expands to its
 parameters, responses and a curl example, and can be run against the server you
@@ -178,6 +185,8 @@ list). Real environment variables override the file.
 | `HASTE_SQLITE_CACHE_MB`  | `48`             | Page cache **per connection**.               |
 | `HASTE_READ_POOL`        | `min(NumCPU, 8)` | Read connections; the writer is always 1.    |
 | `HASTE_RATE_RPS`         | `1`              | Creations per IP per second; `0` disables.   |
+| `HASTE_STATS`            | `off`            | Who may read `/api/stats`: `off`, `token` or `public`. |
+| `HASTE_STATS_TOKEN`      | empty            | Bearer token for `token` mode, 16 characters or more. |
 | `HASTE_BASE_URL`         | derived          | Set when behind a proxy; also the base URL shown at `/docs`. |
 | `HASTE_TRUST_PROXY`      | `false`          | Enable only behind a proxy you control.      |
 

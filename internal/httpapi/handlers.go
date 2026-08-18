@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/YuYu1015/haste-server/internal/config"
 	"github.com/YuYu1015/haste-server/internal/store"
 )
 
@@ -101,11 +104,51 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.BaseURL != "" {
 		cfg["baseUrl"] = s.cfg.BaseURL
 	}
+	// Only the public mode. A token-gated endpoint is for the operator's
+	// monitoring, and documenting it to strangers would only invite guesses.
+	if s.cfg.Stats == config.StatsPublic {
+		cfg["statsPublic"] = true
+	}
 	writeJSON(w, http.StatusOK, cfg)
 }
 
+// statsCacheFor bounds how fresh /api/stats can be.
+//
+// It does two jobs at once. The query is a full table scan — 29ms against
+// 300k pastes, against 0.2ms for every other endpoint — so without a cache an
+// unauthenticated caller can spend the server's IO a hundred times over per
+// request. And the uncached numbers move one paste at a time, which makes them
+// a size oracle for every paste as it arrives; a window coarsens that to a
+// bucket. Short enough that a dashboard is still live.
+const statsCacheFor = 10 * time.Second
+
+// handleStats reports the corpus totals, to whoever the operator allows.
+//
+// Off by default. The totals are of far more use to someone attacking the
+// instance than to anyone using it: they turn filling the storage cap into a
+// task with a progress bar, and a falling count is a receipt confirming that
+// other people's pastes have been evicted.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	st, err := s.store.Stats(r.Context())
+	switch s.cfg.Stats {
+	case config.StatsPublic:
+		// Cacheable by anyone, for as long as the server itself would reuse it.
+		w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(int(statsCacheFor.Seconds())))
+	case config.StatsToken:
+		if !s.statsAuthorized(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="stats"`)
+			writeError(w, http.StatusUnauthorized, "unauthorized", "stats requires a bearer token")
+			return
+		}
+		// An authorized body must not sit in a shared cache.
+		w.Header().Set("Cache-Control", "no-store")
+	default:
+		// 404 rather than 403: a disabled endpoint should look like an absent
+		// one, and say nothing about whether stats exist to be unlocked.
+		writeError(w, http.StatusNotFound, "not_found", "no such endpoint")
+		return
+	}
+
+	st, err := s.cachedStats(r.Context())
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -125,6 +168,34 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		resp["usedFraction"] = round2(float64(st.StoredSize) / float64(st.MaxBytes))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// statsAuthorized checks the bearer token in constant time, so a wrong guess
+// takes as long as a right one whatever prefix it shares.
+func (s *Server) statsAuthorized(r *http.Request) bool {
+	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.StatsToken)) == 1
+}
+
+// cachedStats reuses a recent scan rather than repeating it per request.
+func (s *Server) cachedStats(ctx context.Context) (store.Stats, error) {
+	now := time.Now()
+
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	if now.Sub(s.statsAt) < statsCacheFor {
+		return s.statsValue, nil
+	}
+
+	st, err := s.store.Stats(ctx)
+	if err != nil {
+		return store.Stats{}, err
+	}
+	s.statsValue, s.statsAt = st, now
+	return st, nil
 }
 
 func (s *Server) handleCreate(w http.ResponseWriter, r *http.Request) {

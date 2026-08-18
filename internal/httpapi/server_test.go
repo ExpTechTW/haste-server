@@ -30,7 +30,7 @@ import (
 // default so the suite stays fast; the behaviour under test scales with it.
 const maxCharsForTest = 4000
 
-func newTestServer(t *testing.T) *httptest.Server {
+func newTestServer(t *testing.T, tweak ...func(*config.Config)) *httptest.Server {
 	t.Helper()
 
 	codec, err := compress.New(compress.DefaultLevel)
@@ -49,6 +49,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 		RateRPS: 0,
 		// The lifetime bounds published by /api/config come from here.
 		CleanupInterval: time.Hour,
+	}
+
+	for _, apply := range tweak {
+		apply(cfg)
 	}
 
 	st, err := store.Open(context.Background(), store.Options{
@@ -1033,5 +1037,154 @@ func TestParseExpiresIn(t *testing.T) {
 		if _, err := parseExpiresIn(in); err == nil {
 			t.Errorf("parseExpiresIn(%q) was accepted", in)
 		}
+	}
+}
+
+// The corpus totals are worth more to someone attacking the instance than to
+// anyone using it, so nothing serves them until an operator says so.
+func TestStatsIsOffByDefault(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, err := srv.Client().Get(srv.URL + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	// 404 rather than 403: a disabled endpoint should be indistinguishable from
+	// an absent one, and say nothing about whether there is something to unlock.
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+
+	var body errorResponse
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body.Error != "not_found" {
+		t.Errorf("error = %q, want not_found — anything else advertises the endpoint", body.Error)
+	}
+
+	// And the reference must not list an endpoint that answers 404.
+	cfgResp, err := srv.Client().Get(srv.URL + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cfgResp.Body.Close()
+	var cfg map[string]any
+	json.NewDecoder(cfgResp.Body).Decode(&cfg)
+	if _, present := cfg["statsPublic"]; present {
+		t.Errorf("statsPublic = %v while stats is off", cfg["statsPublic"])
+	}
+}
+
+func TestStatsBehindAToken(t *testing.T) {
+	const token = "0123456789abcdef0123"
+	srv := newTestServer(t, func(c *config.Config) {
+		c.Stats = config.StatsToken
+		c.StatsToken = token
+	})
+
+	get := func(t *testing.T, auth string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/stats", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+
+	for _, tc := range []struct{ name, auth string }{
+		{"no header", ""},
+		{"wrong token", "Bearer 0123456789abcdef0124"},
+		{"a prefix of the token", "Bearer 0123456789abcde"},
+		{"right token, wrong scheme", "Basic " + token},
+		{"bare token", token},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := get(t, tc.auth)
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401", resp.StatusCode)
+			}
+			if got := resp.Header.Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") {
+				t.Errorf("WWW-Authenticate = %q, want a Bearer challenge", got)
+			}
+		})
+	}
+
+	t.Run("the token", func(t *testing.T) {
+		resp := get(t, "Bearer "+token)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		// An authorized body must never sit in a shared cache.
+		if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", got)
+		}
+	})
+
+	// Gated is not the same as published: the public reference must not list it.
+	cfgResp, err := srv.Client().Get(srv.URL + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cfgResp.Body.Close()
+	var cfg map[string]any
+	json.NewDecoder(cfgResp.Body).Decode(&cfg)
+	if _, present := cfg["statsPublic"]; present {
+		t.Error("a token-gated endpoint was advertised as public")
+	}
+}
+
+func TestStatsPublic(t *testing.T) {
+	srv := newTestServer(t, func(c *config.Config) { c.Stats = config.StatsPublic })
+
+	resp, err := srv.Client().Get(srv.URL + "/api/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); !strings.Contains(got, "max-age=") {
+		t.Errorf("Cache-Control = %q, want a max-age so polling cannot be free", got)
+	}
+}
+
+// The scan behind this endpoint is O(rows) and nothing rate limits it, so a
+// second caller must not buy a second scan.
+func TestStatsIsCached(t *testing.T) {
+	srv := newTestServer(t, func(c *config.Config) { c.Stats = config.StatsPublic })
+
+	read := func(t *testing.T) int64 {
+		t.Helper()
+		resp, err := srv.Client().Get(srv.URL + "/api/stats")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var body struct {
+			Count int64 `json:"count"`
+		}
+		json.NewDecoder(resp.Body).Decode(&body)
+		return body.Count
+	}
+
+	if n := read(t); n != 0 {
+		t.Fatalf("count = %d on an empty store, want 0", n)
+	}
+
+	// Creating a paste must not be visible until the window has passed, which
+	// is what stops the totals being a per-paste size oracle.
+	postJSON(t, srv, createBody(t, "a paste that must not show up yet", ""))
+	if n := read(t); n != 0 {
+		t.Errorf("count = %d immediately after a write; the cached scan was bypassed", n)
 	}
 }

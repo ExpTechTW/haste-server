@@ -126,12 +126,14 @@ curl -OJ http://localhost:8080/download/LkKzpZ2q # -> LkKzpZ2q.dart
 | `GET`  | `/raw/{key}`        | 以 `text/plain` 讀取。                |
 | `GET`  | `/download/{key}`   | 下載成 `{key}.{副檔名}`。             |
 | `GET`  | `/api/config`       | 伺服器實際套用的限制。                |
-| `GET`  | `/api/stats`        | 現存筆數與整體壓縮比。                |
+| `GET`  | `/api/stats`        | 現存筆數與整體壓縮比。**預設關閉。**  |
 | `GET`  | `/healthz`          | 存活檢查。                            |
 | `POST` | `/documents`        | 原版 haste-server 協定。              |
 | `GET`  | `/documents/{key}`  | 原版 haste-server 協定。              |
 
 `/documents` 使用原版 haste 的傳輸格式，既有的 CLI 包裝工具不必改就能繼續用。
+
+`/api/stats` 預設回 404。它是運維端點，不是公開端點 —— 那些數字對攻擊者比對使用者有用得多：總量每次只跳動一則貼文，輪詢就能推出每一則新貼文的原始與壓縮大小；`usedFraction` 讓灌爆空間上限變成一件有進度條的事；而 `count` 下降就是別人的貼文正在被擠掉的收據。要開啟就設 `HASTE_STATS=token`（配 `HASTE_STATS_TOKEN`）或 `HASTE_STATS=public`。
 
 同一份說明在 `/docs` 有可互動的版本：每個端點都能展開看參數、回應與 curl 範例，並直接對你正在瀏覽的這台伺服器試打。
 
@@ -156,6 +158,8 @@ curl -OJ http://localhost:8080/download/LkKzpZ2q # -> LkKzpZ2q.dart
 | `HASTE_SQLITE_CACHE_MB`  | `48`             | **每條連線**的 page cache。             |
 | `HASTE_READ_POOL`        | `min(NumCPU, 8)` | 讀取連線數；寫入端永遠只有 1 條。       |
 | `HASTE_RATE_RPS`         | `1`              | 每 IP 每秒可建立筆數；`0` 表示不限制。  |
+| `HASTE_STATS`            | `off`            | `/api/stats` 給誰看：`off` / `token` / `public`。 |
+| `HASTE_STATS_TOKEN`      | 空               | `token` 模式的 bearer token，至少 16 字元。 |
 | `HASTE_BASE_URL`         | 自動推導         | 放在反向代理後面時要設；也是 `/docs` 顯示的 Base URL。 |
 | `HASTE_TRUST_PROXY`      | `false`          | 只在你自己掌控的代理後面才開啟。        |
 

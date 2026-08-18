@@ -37,6 +37,11 @@ export interface ServerConfig {
    * when unset, in which case whichever host you reached is the answer.
    */
   baseUrl?: string
+  /**
+   * Whether /api/stats answers anyone. Absent means it does not — it is an
+   * operational endpoint and is off unless the operator opened it.
+   */
+  statsPublic?: boolean
 }
 
 /** An error the server described in its JSON envelope. */
