@@ -1,4 +1,4 @@
-import { CheckIcon, ClockIcon, InfinityIcon } from "lucide-react"
+import { CheckIcon, ChevronsUpDownIcon, ClockIcon, InfinityIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -17,10 +17,10 @@ import { cn } from "@/lib/utils"
  * How long the paste should live.
  *
  * A plain menu rather than the searchable popover the language picker uses:
- * nine fixed rungs are faster to scan than to type at, and the trigger has to
- * survive a phone's status bar sharing one nowrap row with the counter, the
- * language picker and Save. Hence the terse trigger — "1h", "∞" — with the
- * spelled-out form kept for the menu, where there is room to read.
+ * nine fixed rungs are faster to scan than to type at. The trigger is shaped
+ * like that picker's, because in the save dialog the two sit one above the
+ * other and a settings pair that does not look like a pair reads as two
+ * unrelated things.
  */
 export function ExpiryPicker({
   value,
@@ -48,20 +48,17 @@ export function ExpiryPicker({
             <Button
               variant="outline"
               size="sm"
+              role="combobox"
               aria-label={t("expiry.aria", { value: current.label })}
-              className="shrink-0 gap-1.5 font-normal tabular-nums"
+              className="w-[11rem] shrink-0 justify-start gap-2 font-normal"
             >
-              {/* The infinity mark is the whole label when nothing expires;
-                  pairing it with a clock would say the same thing twice and
-                  read as a clock set to infinity. */}
               {permanent ? (
-                <InfinityIcon className="opacity-60" />
+                <InfinityIcon className="opacity-50" />
               ) : (
-                <>
-                  <ClockIcon className="opacity-60" />
-                  {current.short}
-                </>
+                <ClockIcon className="opacity-50" />
               )}
+              <span className="flex-1 truncate text-left">{current.label}</span>
+              <ChevronsUpDownIcon className="opacity-50" />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>

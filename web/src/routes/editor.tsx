@@ -17,7 +17,6 @@ import { HeaderBar, Kbd, Shell, StatusBar } from "@/components/shell"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useDocumentTitle } from "@/hooks/use-document-title"
-import { useLanguageLabel } from "@/hooks/use-language-label"
 import { useServerConfig } from "@/hooks/use-server-config"
 import { createPaste } from "@/lib/api"
 import { NO_EXPIRY, expiryOptions } from "@/lib/expiry"
@@ -31,7 +30,6 @@ export function EditorPage() {
   const navigate = useNavigate()
   const config = useServerConfig()
   const t = useT()
-  const languageLabel = useLanguageLabel()
 
   // The landing page is the product; nothing more specific to say.
   useDocumentTitle(ORGANISATION)
@@ -78,9 +76,17 @@ export function EditorPage() {
   // deleted once it exists, so the title and the lifetime have to be settled
   // before it does, not discovered afterwards.
   const askToSave = React.useCallback(() => {
-    if (saving || empty || overLimit) return
+    if (saving || empty) return
+    // A disabled button explains nothing, and the counter turning red is easy
+    // to miss when the caret is a thousand lines away from it.
+    if (overLimit) {
+      toast.error(t("editor.overLimit", { max: config.maxChars.toLocaleString() }), {
+        description: t("editor.fileTooBigBody", { max: config.maxChars.toLocaleString() }),
+      })
+      return
+    }
     setConfirming(true)
-  }, [empty, overLimit, saving])
+  }, [config.maxChars, empty, overLimit, saving, t])
 
   const save = React.useCallback(async () => {
     if (saving || empty || overLimit) return
@@ -118,12 +124,15 @@ export function EditorPage() {
         (event.metaKey || event.ctrlKey) && (event.key === "s" || event.key === "Enter")
       if (isSaveChord) {
         event.preventDefault()
-        askToSave()
+        // The same chord that opened the dialog commits from inside it, so the
+        // whole flow is one key held down twice rather than a key then a click.
+        if (confirming) void save()
+        else askToSave()
       }
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [askToSave])
+  }, [askToSave, confirming, save])
 
   const onTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Escape") {
@@ -214,7 +223,7 @@ export function EditorPage() {
             <TooltipTrigger asChild>
               {/* span keeps the tooltip reachable while the button is disabled */}
               <span>
-                <Button size="sm" className="shrink-0" onClick={askToSave} disabled={saving || empty || overLimit}>
+                <Button size="sm" className="shrink-0" onClick={askToSave} disabled={saving || empty}>
                   {saving ? (
                     <LoaderCircleIcon className="animate-spin" />
                   ) : (
@@ -249,12 +258,9 @@ export function EditorPage() {
         onExpiryChange={setExpiresIn}
         expiryOptions={expiries}
         cleanupEverySecs={config.cleanupEverySecs}
-        languageLabel={
-          choice === AUTO && detected !== PLAIN
-            ? `${t("lang.auto")}(${languageLabel(detected)})`
-            : languageLabel(language)
-        }
-        chars={chars}
+        language={choice}
+        detectedLanguage={detected}
+        onLanguageChange={setChoice}
         saving={saving}
         onConfirm={() => void save()}
       />

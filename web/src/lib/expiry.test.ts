@@ -93,9 +93,6 @@ describe("the ladder", () => {
       "14 days",
       "30 days",
     ])
-    expect(expiryOptions(t, SERVER).map((o) => o.short)).toEqual([
-      "∞", "1h", "6h", "12h", "1d", "3d", "7d", "14d", "30d",
-    ])
   })
 
   it("names them in the reader's language too", () => {
@@ -104,10 +101,10 @@ describe("the ladder", () => {
       "1 小時",
       "30 天",
     ])
-    expect(expiryOptions(translator("ja-JP"), [3600, 2592000]).map((o) => o.short)).toEqual([
-      "∞",
-      "1時間",
-      "30日",
+    expect(expiryOptions(translator("ja-JP"), [3600, 2592000]).map((o) => o.label)).toEqual([
+      "期限なし",
+      "1 時間",
+      "30 日",
     ])
   })
 

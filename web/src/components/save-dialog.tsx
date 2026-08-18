@@ -1,8 +1,9 @@
 import * as React from "react"
-import { LoaderCircleIcon, SaveIcon } from "lucide-react"
+import { LoaderCircleIcon, LockIcon, SaveIcon } from "lucide-react"
 
 import { ExpiryPicker } from "@/components/expiry-picker"
-import { Badge } from "@/components/ui/badge"
+import { LanguagePicker } from "@/components/language-picker"
+import { Kbd } from "@/components/shell"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -14,18 +15,20 @@ import {
 } from "@/components/ui/dialog"
 import type { ExpiryOption } from "@/lib/expiry"
 import { useT } from "@/lib/i18n"
-import { cn, countCodePoints } from "@/lib/utils"
+import { cn, countCodePoints, modKey } from "@/lib/utils"
 
 /**
  * The last step before a paste becomes a link.
  *
  * A paste is write-once, so everything decided here is decided for good — which
  * is the argument for a dialog rather than more controls in the status bar.
- * Naming it, choosing how long it lives and seeing what language it was taken
- * for are all the same act: publishing, done deliberately and once.
+ * Naming it, choosing how long it lives and confirming what it was taken for
+ * are one act: publishing, done deliberately and once.
  *
- * The editor's own bar keeps only what belongs to editing: the character count
- * and the language, which drives highlighting while you type.
+ * Three bands, in the order the decisions matter: what it is called, how it is
+ * stored, and what that commits you to. The editor's own bar keeps only what
+ * belongs to editing — the character count, and the language that recolours the
+ * text while you type.
  */
 export function SaveDialog({
   open,
@@ -37,8 +40,9 @@ export function SaveDialog({
   onExpiryChange,
   expiryOptions,
   cleanupEverySecs,
-  languageLabel,
-  chars,
+  language,
+  detectedLanguage,
+  onLanguageChange,
   saving,
   onConfirm,
 }: {
@@ -51,8 +55,9 @@ export function SaveDialog({
   onExpiryChange: (seconds: number) => void
   expiryOptions: ExpiryOption[]
   cleanupEverySecs: number
-  languageLabel: string
-  chars: number
+  language: string
+  detectedLanguage: string
+  onLanguageChange: (language: string) => void
   saving: boolean
   onConfirm: () => void
 }) {
@@ -65,23 +70,13 @@ export function SaveDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        closeLabel={t("save.close")}
-        onKeyDown={(event) => {
-          // Enter commits from anywhere in the dialog. The title is a single
-          // line, so there is nothing Enter could mean instead.
-          if (event.key === "Enter" && !event.shiftKey && !tooLong && !saving) {
-            event.preventDefault()
-            onConfirm()
-          }
-        }}
-      >
-        <DialogHeader>
+      <DialogContent closeLabel={t("save.close")} className="gap-0 p-0">
+        <DialogHeader className="px-5 pt-5 pb-4 sm:px-6 sm:pt-6">
           <DialogTitle>{t("save.title")}</DialogTitle>
           <DialogDescription>{t("save.description")}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 border-y bg-surface px-5 py-5 sm:px-6">
           <div className="space-y-1.5">
             <div className="flex items-baseline justify-between gap-2">
               <label htmlFor="paste-title" className="text-sm font-medium">
@@ -104,6 +99,13 @@ export function SaveDialog({
               id="paste-title"
               value={title}
               onChange={(event) => onTitleChange(event.target.value)}
+              onKeyDown={(event) => {
+                // A single-line field: Enter has nothing else it could mean.
+                if (event.key === "Enter" && !tooLong && !saving) {
+                  event.preventDefault()
+                  onConfirm()
+                }
+              }}
               placeholder={t("save.titlePlaceholder")}
               // Not maxLength: a hard stop swallows a paste of a longer name
               // with no explanation. The counter turning red says what happened.
@@ -111,49 +113,57 @@ export function SaveDialog({
               autoComplete="off"
               spellCheck={false}
               aria-invalid={tooLong}
-              aria-describedby="paste-title-hint"
+              aria-describedby={tooLong ? "paste-title-error" : undefined}
               className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20"
             />
-            <p
-              id="paste-title-hint"
-              className={cn("text-xs", tooLong ? "text-destructive" : "text-muted-foreground")}
-            >
-              {tooLong ? t("save.titleTooLong", { max: maxTitleChars }) : t("save.titleHint")}
-            </p>
+            {tooLong && (
+              <p id="paste-title-error" className="text-xs text-destructive">
+                {t("save.titleTooLong", { max: maxTitleChars })}
+              </p>
+            )}
           </div>
 
-          <Row label={t("save.expiry")}>
-            <ExpiryPicker
-              value={expiresIn}
-              options={expiryOptions}
-              cleanupEverySecs={cleanupEverySecs}
-              onChange={onExpiryChange}
-            />
-          </Row>
-
-          {/* Shown rather than editable: the language belongs to the editor,
-              where changing it recolours the text you are looking at. Here it
-              is a receipt for what is about to be saved. */}
-          <Row label={t("save.language")}>
-            <Badge variant="secondary" className="font-normal">
-              {languageLabel}
-            </Badge>
-          </Row>
-
-          <Row label={t("save.size")}>
-            <span className="font-mono text-xs tabular-nums text-muted-foreground">
-              {t("paste.chars", { count: chars.toLocaleString() })}
-            </span>
-          </Row>
+          {/* One panel, one rule between: two settings that are read together. */}
+          <div className="divide-y rounded-lg border bg-background">
+            <Row label={t("save.expiry")}>
+              <ExpiryPicker
+                value={expiresIn}
+                options={expiryOptions}
+                cleanupEverySecs={cleanupEverySecs}
+                onChange={onExpiryChange}
+              />
+            </Row>
+            <Row label={t("save.language")}>
+              <LanguagePicker
+                value={language}
+                detected={detectedLanguage}
+                onChange={onLanguageChange}
+              />
+            </Row>
+          </div>
         </div>
 
-        <DialogFooter>
+        {/*
+          The consequence, next to the setting that answers it: a lifetime is
+          the only delete this server has, so the moment to think about it is
+          while the picker above is still in reach.
+        */}
+        <div className="flex gap-2.5 px-5 py-4 sm:px-6">
+          <LockIcon className="mt-0.5 size-4 shrink-0 text-warning" />
+          <p className="text-xs leading-relaxed text-muted-foreground">{t("save.noDelete")}</p>
+        </div>
+
+        <DialogFooter className="border-t px-5 py-4 sm:px-6">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             {t("save.cancel")}
           </Button>
           <Button onClick={onConfirm} disabled={saving || tooLong}>
             {saving ? <LoaderCircleIcon className="animate-spin" /> : <SaveIcon />}
             {t("save.confirm")}
+            {/* Hidden where there is no keyboard to press it with. */}
+            <span className="hidden sm:inline-flex">
+              <Kbd>{modKey()}S</Kbd>
+            </span>
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -163,7 +173,7 @@ export function SaveDialog({
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-9 items-center justify-between gap-3">
+    <div className="flex min-h-12 items-center justify-between gap-3 px-3">
       <span className="text-sm font-medium">{label}</span>
       {children}
     </div>

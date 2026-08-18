@@ -15,15 +15,11 @@ export const NO_EXPIRY = 0
 export interface ExpiryOption {
   /** Seconds, as sent to the API. */
   seconds: number
-  /** Terse form for the trigger, where width is scarce. */
-  short: string
-  /** Spelled out, for the menu. */
   label: string
 }
 
 const none = (t: Translate): ExpiryOption => ({
   seconds: NO_EXPIRY,
-  short: "∞",
   label: t("expiry.none"),
 })
 
@@ -58,17 +54,8 @@ function describeSeconds(t: Translate, seconds: number): ExpiryOption {
   return unit(t, seconds, Math.round(seconds / 60), "minute")
 }
 
-function unit(
-  t: Translate,
-  seconds: number,
-  count: number,
-  name: TimeUnit,
-): ExpiryOption {
-  return {
-    seconds,
-    short: formatCountShort(t, name, count),
-    label: formatCount(t, name, count),
-  }
+function unit(t: Translate, seconds: number, count: number, name: TimeUnit): ExpiryOption {
+  return { seconds, label: formatCount(t, name, count) }
 }
 
 /** The parts of a countdown, floored — never more time than there really is. */
