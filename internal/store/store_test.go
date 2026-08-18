@@ -49,7 +49,7 @@ func TestCreateAndGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	content := "package main\n\nfunc main() {\n\tprintln(\"héllo, 世界\")\n}\n"
-	p, err := st.Create(ctx, content, "go")
+	p, err := st.Create(ctx, content, "go", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestCodesAreMinimumLengthAndUnordered(t *testing.T) {
 
 	var codes []string
 	for i := 0; i < 20; i++ {
-		p, err := st.Create(ctx, "x", "")
+		p, err := st.Create(ctx, "x", "", NoExpiry)
 		if err != nil {
 			t.Fatalf("Create #%d: %v", i, err)
 		}
@@ -102,14 +102,14 @@ func TestLimits(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	if _, err := st.Create(ctx, "", ""); !errors.Is(err, ErrEmpty) {
+	if _, err := st.Create(ctx, "", "", NoExpiry); !errors.Is(err, ErrEmpty) {
 		t.Errorf("empty paste: got %v, want ErrEmpty", err)
 	}
 	// 4001 multi-byte runes: proves the cap counts characters, not bytes.
-	if _, err := st.Create(ctx, strings.Repeat("界", 4001), ""); !errors.Is(err, ErrTooLarge) {
+	if _, err := st.Create(ctx, strings.Repeat("界", 4001), "", NoExpiry); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("oversized paste: got %v, want ErrTooLarge", err)
 	}
-	if _, err := st.Create(ctx, strings.Repeat("界", 4000), ""); err != nil {
+	if _, err := st.Create(ctx, strings.Repeat("界", 4000), "", NoExpiry); err != nil {
 		t.Errorf("paste at exactly the limit should be accepted: %v", err)
 	}
 }
@@ -130,7 +130,7 @@ func TestPasteContentIsImmutable(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "original", "")
+	p, err := st.Create(ctx, "original", "", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -150,6 +150,9 @@ func TestPasteContentIsImmutable(t *testing.T) {
 		{"raw_bytes", int64(1)},
 		{"language", "tampered"},
 		{"created_at", int64(0)},
+		// A lifetime is a promise made to whoever holds the link, so it is
+		// frozen the same way the content is — in both directions.
+		{"expires_at", int64(0)},
 	}
 
 	for _, c := range columns {
@@ -175,7 +178,7 @@ func TestAccessTimeRemainsWritable(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "content", "")
+	p, err := st.Create(ctx, "content", "", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -225,7 +228,7 @@ func TestSpaceCapHoldsOnEveryWrite(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 400; i++ {
-		if _, err := st.Create(ctx, fmt.Sprintf("paste number %d %s", i, strings.Repeat("x", 900)), ""); err != nil {
+		if _, err := st.Create(ctx, fmt.Sprintf("paste number %d %s", i, strings.Repeat("x", 900)), "", NoExpiry); err != nil {
 			t.Fatalf("Create #%d: %v", i, err)
 		}
 		stored := storedBytesNow(t, st)
@@ -252,11 +255,11 @@ func TestEvictionRemovesLeastRecentlyUsed(t *testing.T) {
 
 	filler := strings.Repeat("unique-filler-content ", 40)
 
-	oldest, err := st.Create(ctx, "oldest paste "+filler, "")
+	oldest, err := st.Create(ctx, "oldest paste "+filler, "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	middle, err := st.Create(ctx, "middle paste "+filler, "")
+	middle, err := st.Create(ctx, "middle paste "+filler, "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +308,7 @@ func TestRejectsPasteLargerThanTheWholeCap(t *testing.T) {
 	}
 	content := string([]rune(b.String())[:4000])
 
-	if _, err := st.Create(ctx, content, ""); !errors.Is(err, ErrNoRoom) {
+	if _, err := st.Create(ctx, content, "", NoExpiry); !errors.Is(err, ErrNoRoom) {
 		t.Errorf("got %v, want ErrNoRoom", err)
 	}
 }
@@ -314,7 +317,7 @@ func TestTTLsAreDisabledByDefault(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "permanent", "")
+	p, err := st.Create(ctx, "permanent", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,11 +340,11 @@ func TestAccessTTL(t *testing.T) {
 	st := newTestStore(t, func(o *Options) { o.TTLAccess = time.Hour })
 	ctx := context.Background()
 
-	stale, err := st.Create(ctx, "stale", "")
+	stale, err := st.Create(ctx, "stale", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := st.Create(ctx, "fresh", "")
+	fresh, err := st.Create(ctx, "fresh", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +371,7 @@ func TestCreateTTL(t *testing.T) {
 	st := newTestStore(t, func(o *Options) { o.TTLCreate = time.Hour })
 	ctx := context.Background()
 
-	old, err := st.Create(ctx, "old", "")
+	old, err := st.Create(ctx, "old", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +409,7 @@ func TestReadsDoNotWriteUntilFlushed(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "content", "")
+	p, err := st.Create(ctx, "content", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +444,7 @@ func TestConcurrentCreatesGetDistinctCodes(t *testing.T) {
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func() {
-			p, err := st.Create(ctx, "concurrent", "")
+			p, err := st.Create(ctx, "concurrent", "", NoExpiry)
 			if err != nil {
 				errs <- err
 				return
@@ -536,7 +539,7 @@ func TestAcceptsAClassicSizedPaste(t *testing.T) {
 	}
 	content := string([]rune(b.String())[:limit])
 
-	p, err := st.Create(ctx, content, "log")
+	p, err := st.Create(ctx, content, "log", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create at the limit: %v", err)
 	}
@@ -558,7 +561,249 @@ func TestAcceptsAClassicSizedPaste(t *testing.T) {
 		limit, got.RawBytes, got.StoredSize, float64(got.RawBytes)/float64(got.StoredSize))
 
 	// One character over is still refused, at the new limit as at the old.
-	if _, err := st.Create(ctx, content+"x", ""); !errors.Is(err, ErrTooLarge) {
+	if _, err := st.Create(ctx, content+"x", "", NoExpiry); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("one character over the limit: got %v, want ErrTooLarge", err)
+	}
+}
+
+func TestLifetimeIsRecordedAsAnInstant(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	before := time.Now()
+	p, err := st.Create(ctx, "temporary", "", 6*time.Hour)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// An absolute deadline, not a duration counted from whenever the row is
+	// next read: a restart must not extend a paste's life.
+	want := before.Add(6 * time.Hour)
+	if diff := p.ExpiresAt.Sub(want); diff < -2*time.Second || diff > 2*time.Second {
+		t.Errorf("ExpiresAt = %s, want within 2s of %s", p.ExpiresAt, want)
+	}
+
+	// And it survives the round trip rather than living only in the response.
+	got, _, err := st.Get(ctx, p.Code)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !got.ExpiresAt.Equal(p.ExpiresAt) {
+		t.Errorf("ExpiresAt after reload = %s, want %s", got.ExpiresAt, p.ExpiresAt)
+	}
+}
+
+func TestNoLifetimeLeavesTheColumnNull(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	p, err := st.Create(ctx, "permanent", "", NoExpiry)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !p.ExpiresAt.IsZero() {
+		t.Errorf("ExpiresAt = %s, want zero for a paste that asked for no lifetime", p.ExpiresAt)
+	}
+
+	// NULL rather than 0: "no lifetime" has to be distinguishable from "expired
+	// at the epoch", or every query would need a sentinel comparison.
+	var expires sql.NullInt64
+	if err := st.w.QueryRowContext(ctx,
+		`SELECT expires_at FROM pastes WHERE seq = ?`, p.Seq).Scan(&expires); err != nil {
+		t.Fatal(err)
+	}
+	if expires.Valid {
+		t.Errorf("expires_at = %d, want NULL", expires.Int64)
+	}
+}
+
+func TestCreateRejectsLifetimesOutOfRange(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	for _, ttl := range []time.Duration{
+		time.Second,
+		MinTTL - time.Second,
+		MaxTTL + time.Second,
+		-time.Hour,
+	} {
+		if _, err := st.Create(ctx, "content", "", ttl); !errors.Is(err, ErrBadTTL) {
+			t.Errorf("Create with ttl %s: err = %v, want ErrBadTTL", ttl, err)
+		}
+	}
+	for _, ttl := range []time.Duration{NoExpiry, MinTTL, MaxTTL} {
+		if _, err := st.Create(ctx, "content", "", ttl); err != nil {
+			t.Errorf("Create with ttl %s: %v", ttl, err)
+		}
+	}
+}
+
+// A lifetime has to hold the moment it runs out, not whenever the hourly sweep
+// next happens to run — otherwise the time shown to the user is fiction.
+func TestExpiredPasteStopsBeingServedBeforeTheSweep(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	live, err := st.Create(ctx, "still here", "", MinTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead := expiringRow(t, st, "gone", time.Now().Add(-time.Minute))
+
+	if _, _, err := st.Get(ctx, dead); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get on an expired paste: err = %v, want ErrNotFound", err)
+	}
+	if _, err := st.Meta(ctx, dead); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Meta on an expired paste: err = %v, want ErrNotFound", err)
+	}
+	if _, _, err := st.Get(ctx, live.Code); err != nil {
+		t.Errorf("Get on a paste still within its lifetime: %v", err)
+	}
+
+	result, err := st.Sweep(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Expired != 1 {
+		t.Errorf("Expired = %d, want 1", result.Expired)
+	}
+	if result.SpaceEvicted+result.AccessExpired+result.CreateExpired != 0 {
+		t.Errorf("another rule also fired: %+v", result)
+	}
+
+	var rows int
+	if err := st.w.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pastes WHERE code = ?`, dead).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Errorf("the expired row is still in the table after a sweep")
+	}
+}
+
+// The byte counter drives the space cap on every write, so a sweep that frees
+// bytes without decrementing it would shrink the usable database on each pass.
+func TestSweepingAnExpiredPasteReturnsItsBytes(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	before := storedBytesNow(t, st)
+	expiringRow(t, st, strings.Repeat("expired ", 200), time.Now().Add(-time.Minute))
+	if grew := storedBytesNow(t, st) - before; grew <= 0 {
+		t.Fatalf("stored_bytes did not grow after the insert: %d", grew)
+	}
+
+	if _, err := st.Sweep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := storedBytesNow(t, st); after != before {
+		t.Errorf("stored_bytes = %d after sweeping the expired paste, want %d", after, before)
+	}
+}
+
+// expiringRow stores content and then rewrites the row with the given deadline,
+// which is the only way to reach the past: Create validates the lifetime, and
+// the immutability trigger refuses to let expires_at be updated afterwards.
+func expiringRow(t *testing.T, st *Store, content string, at time.Time) string {
+	t.Helper()
+	ctx := context.Background()
+
+	p, err := st.Create(ctx, content, "", NoExpiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.w.ExecContext(ctx,
+		`UPDATE pastes SET expires_at = ? WHERE seq = ?`, at.Unix(), p.Seq); err == nil {
+		t.Fatal("expires_at was updatable; the immutability trigger is not covering it")
+	}
+	if _, err := st.w.ExecContext(ctx, `DELETE FROM pastes WHERE seq = ?`, p.Seq); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.w.ExecContext(ctx,
+		`INSERT INTO pastes (seq, code, body, codec, bytes, chars, raw_bytes, language, created_at, accessed_at, expires_at)
+		 VALUES (?, ?, ?, 0, ?, ?, ?, '', ?, ?, ?)`,
+		p.Seq, p.Code, []byte(content), len(content), len(content), len(content),
+		p.CreatedAt.Unix(), p.CreatedAt.Unix(), at.Unix()); err != nil {
+		t.Fatal(err)
+	}
+	return p.Code
+}
+
+// A database written before temporary pastes existed has to keep working, with
+// its rows intact: CREATE TABLE IF NOT EXISTS does nothing to a table that is
+// already there, so nothing but the migration adds the column.
+func TestOpensADatabaseWrittenBeforeExpiries(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "haste.db")
+
+	// The shipped schema as it stood, trigger included, so the test exercises
+	// the real starting point rather than a convenient subset of it.
+	legacy, err := sql.Open("sqlite", dsn(path, 8, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.ExecContext(ctx, `
+		CREATE TABLE counters (name TEXT PRIMARY KEY, value INTEGER NOT NULL) STRICT;
+		INSERT INTO counters (name, value) VALUES ('paste_seq', 1), ('stored_bytes', 3);
+		CREATE TABLE pastes (
+		    seq INTEGER PRIMARY KEY, code TEXT NOT NULL, body BLOB NOT NULL,
+		    codec INTEGER NOT NULL, bytes INTEGER NOT NULL, chars INTEGER NOT NULL,
+		    raw_bytes INTEGER NOT NULL, language TEXT NOT NULL DEFAULT '',
+		    created_at INTEGER NOT NULL, accessed_at INTEGER NOT NULL
+		) STRICT;
+		CREATE UNIQUE INDEX pastes_code_idx ON pastes (code);
+		CREATE TRIGGER pastes_immutable
+		BEFORE UPDATE OF seq, code, body, codec, bytes, chars, raw_bytes, language, created_at
+		ON pastes BEGIN SELECT RAISE(ABORT, 'pastes are immutable'); END;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.ExecContext(ctx,
+		`INSERT INTO pastes VALUES (1, 'legacyAA', ?, 0, 3, 3, 3, 'go', ?, ?)`,
+		[]byte("abc"), time.Now().Unix(), time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	codec, err := compress.New(compress.DefaultLevel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(codec.Close)
+
+	st, err := Open(ctx, Options{
+		Path: path, CacheMB: 8, ReadPool: 2, MaxChars: 4000, Codec: codec,
+		IDs: id.NewGenerator([]byte("test-secret"), id.DefaultMinLen, nil),
+	})
+	if err != nil {
+		t.Fatalf("Open over a pre-expiry database: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	// The existing paste survives, and reads as having no lifetime rather than
+	// one that already ran out.
+	old, err := st.Meta(ctx, "legacyAA")
+	if err != nil {
+		t.Fatalf("Meta on the migrated row: %v", err)
+	}
+	if !old.ExpiresAt.IsZero() {
+		t.Errorf("migrated row has ExpiresAt = %s, want none", old.ExpiresAt)
+	}
+
+	// The new column works for writes...
+	fresh, err := st.Create(ctx, "temporary", "", MinTTL)
+	if err != nil {
+		t.Fatalf("Create with a lifetime after migrating: %v", err)
+	}
+	if fresh.ExpiresAt.IsZero() {
+		t.Error("a paste created with a lifetime came back with none")
+	}
+
+	// ...and the trigger was replaced, not left as the older build wrote it.
+	if _, err := st.w.ExecContext(ctx,
+		`UPDATE pastes SET expires_at = 0 WHERE seq = ?`, fresh.Seq); err == nil {
+		t.Error("expires_at is updatable; the old trigger survived the migration")
 	}
 }

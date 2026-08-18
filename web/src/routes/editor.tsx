@@ -1,15 +1,24 @@
 import * as React from "react"
 import { useNavigate } from "react-router-dom"
-import { FileUpIcon, LoaderCircleIcon, SaveIcon } from "lucide-react"
+import {
+  CornerDownLeftIcon,
+  FileUpIcon,
+  KeyboardIcon,
+  LoaderCircleIcon,
+  SaveIcon,
+  ScrollTextIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { CodeEditor } from "@/components/code-editor"
+import { ExpiryPicker } from "@/components/expiry-picker"
 import { AUTO, LanguagePicker } from "@/components/language-picker"
 import { HeaderBar, Kbd, Shell, StatusBar } from "@/components/shell"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useServerConfig } from "@/hooks/use-server-config"
 import { ApiError, createPaste } from "@/lib/api"
+import { NO_EXPIRY, availableExpiries } from "@/lib/expiry"
 import { PLAIN, detectLanguage } from "@/lib/languages"
 import { cn, countCodePoints, modKey } from "@/lib/utils"
 
@@ -19,6 +28,7 @@ export function EditorPage() {
 
   const [content, setContent] = React.useState("")
   const [choice, setChoice] = React.useState(AUTO)
+  const [expiresIn, setExpiresIn] = React.useState(NO_EXPIRY)
   const [saving, setSaving] = React.useState(false)
   const [dragging, setDragging] = React.useState(false)
 
@@ -33,6 +43,11 @@ export function EditorPage() {
   const detected = React.useMemo(() => detectLanguage(deferred), [deferred])
   const language = choice === AUTO ? detected : choice
 
+  const expiries = React.useMemo(
+    () => availableExpiries(config.minExpirySecs, config.maxExpirySecs),
+    [config.minExpirySecs, config.maxExpirySecs],
+  )
+
   // Code points, matching the runes the server counts.
   const chars = React.useMemo(() => countCodePoints(content), [content])
   const overLimit = chars > config.maxChars
@@ -43,7 +58,16 @@ export function EditorPage() {
 
     setSaving(true)
     try {
-      const paste = await createPaste(content, language === PLAIN ? "" : language)
+      const paste = await createPaste(content, language === PLAIN ? "" : language, expiresIn)
+      // Saying nothing here would let "no expiry" be read as "kept forever",
+      // which is the one thing the store cannot promise. Said once, at the
+      // moment the choice takes effect, rather than as standing small print.
+      if (expiresIn === NO_EXPIRY) {
+        toast.info("Saved without an expiry", {
+          description:
+            "No deletion time was set. That is not a promise to keep it: pastes are removed when the server needs the space.",
+        })
+      }
       // Hand the created paste forward so the next view renders without a
       // second round trip.
       navigate(`/${paste.key}`, { state: { paste } })
@@ -53,7 +77,7 @@ export function EditorPage() {
       toast.error("Could not save paste", { description: message })
       setSaving(false)
     }
-  }, [content, empty, language, navigate, overLimit, saving])
+  }, [content, empty, expiresIn, language, navigate, overLimit, saving])
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -122,9 +146,10 @@ export function EditorPage() {
           language={language}
           onChange={setContent}
           onKeyDown={onTextareaKeyDown}
-          placeholder="Paste your code or logs here…"
           invalid={overLimit}
         />
+
+        {empty && !dragging && <Welcome maxChars={config.maxChars} />}
 
         {dragging && (
           <div className="pointer-events-none absolute inset-3 flex items-center justify-center rounded-lg border-2 border-dashed border-ring bg-background/85 backdrop-blur-[1px]">
@@ -147,8 +172,13 @@ export function EditorPage() {
           {chars.toLocaleString()} / {config.maxChars.toLocaleString()}
         </span>
 
-
         <div className="ml-auto flex min-w-0 items-center gap-2">
+          <ExpiryPicker
+            value={expiresIn}
+            options={expiries}
+            cleanupEverySecs={config.cleanupEverySecs}
+            onChange={setExpiresIn}
+          />
           <LanguagePicker value={choice} detected={detected} onChange={setChoice} />
 
           <Tooltip>
@@ -181,3 +211,59 @@ export function EditorPage() {
   )
 }
 
+/**
+ * What an empty editor says for itself.
+ *
+ * It replaces the textarea's placeholder rather than sitting alongside it: one
+ * piece of guidance, centred where the eye lands, instead of a grey line in the
+ * corner. Nothing here takes pointer events, so a click anywhere still puts the
+ * caret in the editor underneath — the point of the page is that you can start
+ * typing without deciding anything first.
+ */
+function Welcome({ maxChars }: { maxChars: number }) {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute inset-0 flex select-none items-center justify-center overflow-hidden px-6"
+    >
+      {/* A single soft light behind the wordmark. Sized in viewport units so it
+          stays a wash rather than becoming a visible disc on a wide screen. */}
+      <div className="absolute size-[60vmin] rounded-full bg-foreground/[0.045] blur-3xl" />
+
+      <div className="relative flex flex-col items-center gap-6 text-center">
+        <div className="space-y-2.5">
+          <h1 className="font-mono text-4xl font-semibold tracking-tight sm:text-5xl">haste</h1>
+          <p className="text-sm text-muted-foreground sm:text-base">
+            Paste code or logs. Get a short link back.
+          </p>
+        </div>
+
+        {/* Dropped on a short viewport before the wordmark is: the hints are
+            the part you can do without once you have seen them. */}
+        <div className="hidden flex-wrap items-center justify-center gap-2 min-[400px]:flex">
+          <Hint icon={<KeyboardIcon />}>Start typing</Hint>
+          <Hint icon={<FileUpIcon />}>Drop a file</Hint>
+          <Hint icon={<CornerDownLeftIcon />}>
+            <span className="flex items-center gap-1.5">
+              <Kbd>{modKey()}S</Kbd> to save
+            </span>
+          </Hint>
+        </div>
+
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground/80">
+          <ScrollTextIcon className="size-3.5" />
+          Up to {maxChars.toLocaleString()} characters, highlighted as you type
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function Hint({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <span className="flex items-center gap-2 rounded-full border bg-background/60 px-3 py-1.5 text-xs text-muted-foreground [&>svg]:size-3.5 [&>svg]:opacity-70">
+      {icon}
+      {children}
+    </span>
+  )
+}

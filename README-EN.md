@@ -9,8 +9,10 @@ endpoints, and the React frontend all embedded.
 
 - **Short hash-style codes that never collide** — `k7Qm2Xp9`, not `1`, `2`, `3`.
 - **Write-once.** There is no edit or delete path, and the database enforces it.
-- **A byte cap, not a promise.** Storage is bounded on every write; nothing
-  advertises a lifetime the server cannot honour.
+- **Temporary pastes on request** — an hour to thirty days. Asking for nothing
+  means no timed deletion, which is not the same as being kept.
+- **A byte cap, not a promise.** Storage is bounded on every write; apart from a
+  lifetime you asked for, nothing advertises a span the server cannot honour.
 - **Line links** — `#L17-L25`, addressed and shared the way GitHub does it.
 - **Heavy compression with a built-in dictionary.** A 300-byte log excerpt
   stores in ~19 bytes.
@@ -50,6 +52,7 @@ make dev-web  # UI on :5173
 | Action | How |
 | ------ | --- |
 | Save | `⌘/Ctrl + S`, or the Save button |
+| Set a lifetime | The clock menu in the status bar — 1h to 30d, or none |
 | Load a file | Drop it onto the editor |
 | Select a line | Click its number → `#L17` |
 | Select a range | Shift-click another number → `#L17-L25` |
@@ -59,6 +62,10 @@ make dev-web  # UI on :5173
 
 The language is detected as you type and highlighted live. The picker shows
 `Auto · Dart`; choosing one yourself pins it.
+
+The lifetime defaults to none, and saving with none says so once: it means no
+deletion time was set, not that the paste is kept. When space runs short the
+least recently opened pastes still go first.
 
 ## API
 
@@ -72,6 +79,10 @@ curl --data-binary @main.go http://localhost:8080/api/pastes
 curl -X POST http://localhost:8080/api/pastes \
   -H 'Content-Type: application/json' \
   -d '{"content":"print(1)","language":"python"}'
+
+# Delete it in six hours. JSON takes expiresIn in seconds; a raw body passes it
+# in the query string, as seconds or as a duration like 1h / 30m.
+curl --data-binary @debug.log 'http://localhost:8080/api/pastes?expiresIn=6h'
 
 # Read it back
 curl http://localhost:8080/api/pastes/LkKzpZ2q   # JSON, with content
@@ -96,9 +107,15 @@ compressor achieved:
   "bytes": 231,
   "stored": 162,
   "ratio": 1.43,
-  "createdAt": "2026-08-18T16:19:25Z"
+  "createdAt": "2026-08-18T16:19:25Z",
+  "expiresAt": "2026-08-18T22:19:25Z"
 }
 ```
+
+`expiresAt` appears only when a lifetime was asked for. It is *absent* rather
+than `null`, because its absence means no deletion time was set — not that the
+paste is permanent. A lifetime has to fall between one hour and thirty days;
+anything else is a `400 bad_expiry`.
 
 | Method | Path                | Purpose                                     |
 | ------ | ------------------- | ------------------------------------------- |
@@ -211,8 +228,16 @@ reader expects.
 
 ### Retention
 
-Retention is a budget rather than a promise, which is why nothing in the UI or
-the API advertises a lifetime.
+Retention is a budget rather than a promise. The one exception is a lifetime a
+paste asked for: that is a commitment made to whoever holds the link, so it is
+swept first and it is the only span the UI ever shows.
+
+A lifetime is stored as an absolute instant rather than a duration, so a restart
+cannot grant a paste another round. It stops being served the moment it runs
+out — the read queries filter expired rows themselves — so the link dies on
+time; erasing the row waits for the next sweep, up to an hour later. That lag is
+written into the picker rather than left to be inferred. The deadline itself is
+immutable: `expires_at` is guarded by the same trigger as the content.
 
 `HASTE_MAX_BYTES` is the only hard guarantee. It is checked inside the same
 transaction as every insert, evicting least-recently-**read** pastes to make
@@ -220,7 +245,9 @@ room, so the database cannot outgrow its allowance no matter how fast pastes
 arrive — an hourly sweep alone would let a burst overshoot for an hour. Two
 optional TTLs trim further, one on last access and one on creation; both are off
 by default, and either can be left unset to disable that rule entirely. The
-sweep applies them in priority order: cap, then access age, then creation age.
+sweep applies them in priority order: a paste's own lifetime, then the cap, then
+access age, then creation age. Expired pastes go first so the bytes they free
+count towards the cap instead of pushing a live paste out of it.
 
 Tracking last access means writing on reads, which would funnel every read
 through the single writer. Instead reads queue their timestamps in memory and a

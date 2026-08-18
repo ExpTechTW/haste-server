@@ -40,7 +40,6 @@ export function CodeEditor({
   language,
   onChange,
   onKeyDown,
-  placeholder,
   invalid,
   className,
 }: {
@@ -48,7 +47,6 @@ export function CodeEditor({
   language: string
   onChange: (value: string) => void
   onKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>
-  placeholder?: string
   invalid?: boolean
   className?: string
 }) {
@@ -80,9 +78,11 @@ export function CodeEditor({
   const html = React.useMemo(() => {
     if (tooLargeToColour) return null
     if (ready?.language !== language) return null
-    // The trailing newline gives the layer the same final empty line the
-    // textarea shows, so the two never differ in height by one row.
-    return highlightSync(ready.shiki, value + "\n", language)
+    // Highlighted as-is. Shiki keeps a trailing empty line rather than trimming
+    // it, so "abc\n" is already the two rows a textarea holding it shows —
+    // padding it further would number a line that does not exist, which on an
+    // empty editor is a gutter reading "1 2" over no text at all.
+    return highlightSync(ready.shiki, value, language)
   }, [ready, value, language, tooLargeToColour])
 
   return (
@@ -95,7 +95,7 @@ export function CodeEditor({
           ) : (
             // Same metrics, no colour: the text is visible from the first frame
             // rather than appearing once the grammar arrives.
-            <pre className="shiki">{value + "\n"}</pre>
+            <pre className="shiki">{value}</pre>
           )}
         </div>
 
@@ -108,7 +108,6 @@ export function CodeEditor({
           autoCapitalize="off"
           autoCorrect="off"
           autoComplete="off"
-          placeholder={placeholder}
           aria-label="Paste content"
           aria-invalid={invalid}
           className="code-metrics caret-foreground absolute inset-0 h-full w-full resize-none overflow-hidden bg-transparent text-transparent outline-none placeholder:text-muted-foreground/60"

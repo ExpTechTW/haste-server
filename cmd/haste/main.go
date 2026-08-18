@@ -143,6 +143,7 @@ func sweeper(ctx context.Context, st *store.Store, every time.Duration, log *slo
 		}
 		if result.Removed() > 0 {
 			log.Info("cleanup",
+				"expiredByLifetime", result.Expired,
 				"evictedForSpace", result.SpaceEvicted,
 				"expiredByAccess", result.AccessExpired,
 				"expiredByAge", result.CreateExpired,

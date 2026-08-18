@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -45,6 +46,8 @@ func newTestServer(t *testing.T) *httptest.Server {
 		// Rate limiting has its own test; leave it off elsewhere so a burst of
 		// table-driven cases cannot trip it.
 		RateRPS: 0,
+		// The lifetime bounds published by /api/config come from here.
+		CleanupInterval: time.Hour,
 	}
 
 	st, err := store.Open(context.Background(), store.Options{
@@ -766,5 +769,181 @@ func TestCreateAcceptsEscapedJSONAtLimit(t *testing.T) {
 				t.Fatalf("round trip returned %d characters, want %d", n, maxCharsForTest)
 			}
 		})
+	}
+}
+
+func TestCreateWithALifetime(t *testing.T) {
+	srv := newTestServer(t)
+
+	t.Run("json envelope", func(t *testing.T) {
+		body, err := json.Marshal(map[string]any{"content": "temporary", "expiresIn": 3600})
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, out := postJSON(t, srv, string(body))
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", resp.StatusCode)
+		}
+		if out.ExpiresAt == nil {
+			t.Fatal("expiresAt is absent from the response")
+		}
+		if d := time.Until(*out.ExpiresAt); d < 59*time.Minute || d > time.Hour+time.Minute {
+			t.Errorf("expiresAt is %s away, want about an hour", d)
+		}
+	})
+
+	t.Run("raw body with a duration", func(t *testing.T) {
+		// The raw path has no envelope, so curl passes the lifetime in the query
+		// string — as a duration here, which is what a person types.
+		resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn=2h", "text/plain",
+			strings.NewReader("temporary"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		var out pasteResponse
+		json.NewDecoder(resp.Body).Decode(&out)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("status = %d, want 201", resp.StatusCode)
+		}
+		if out.ExpiresAt == nil {
+			t.Fatal("expiresAt is absent from the response")
+		}
+		if d := time.Until(*out.ExpiresAt); d < 119*time.Minute || d > 2*time.Hour+time.Minute {
+			t.Errorf("expiresAt is %s away, want about two hours", d)
+		}
+	})
+
+	// Omission has to stay omission: a null expiresAt would read as a promise
+	// that the paste is permanent, which nothing here can make.
+	t.Run("no lifetime asked for", func(t *testing.T) {
+		resp, err := srv.Client().Post(srv.URL+"/api/pastes", "application/json",
+			strings.NewReader(createBody(t, "permanent", "")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		var raw map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if _, present := raw["expiresAt"]; present {
+			t.Errorf("expiresAt is present as %v for a paste that asked for no lifetime", raw["expiresAt"])
+		}
+	})
+}
+
+func TestCreateRejectsBadLifetimes(t *testing.T) {
+	srv := newTestServer(t)
+
+	for _, tc := range []struct{ name, body string }{
+		{"under the minimum", `{"content":"x","expiresIn":60}`},
+		{"over the maximum", `{"content":"x","expiresIn":31536000}`},
+		{"negative", `{"content":"x","expiresIn":-3600}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, _ := postJSON(t, srv, tc.body)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", resp.StatusCode)
+			}
+		})
+	}
+
+	t.Run("unparseable in the query string", func(t *testing.T) {
+		resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn=soon", "text/plain",
+			strings.NewReader("x"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+	})
+}
+
+// A shared cache must not outlive the paste it is holding, or the link keeps
+// working at the edge after the server has retired it.
+func TestCacheControlIsTrimmedToTheRemainingLifetime(t *testing.T) {
+	srv := newTestServer(t)
+
+	body, err := json.Marshal(map[string]any{"content": "temporary", "expiresIn": 3600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, short := postJSON(t, srv, string(body))
+	_, long := postJSON(t, srv, createBody(t, "permanent", ""))
+
+	for _, tc := range []struct{ name, path, want string }{
+		{"paste outliving the cache window", "/api/pastes/" + long.Key, "max-age=300"},
+		{"raw of the same", "/raw/" + long.Key, "max-age=300"},
+		{"paste with an hour left", "/api/pastes/" + short.Key, "max-age=300"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := srv.Client().Get(srv.URL + tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if got := resp.Header.Get("Cache-Control"); !strings.Contains(got, tc.want) {
+				t.Errorf("Cache-Control = %q, want it to contain %q", got, tc.want)
+			}
+		})
+	}
+
+	// The interesting case is a paste with less left than the cache window,
+	// which Create cannot produce because the minimum lifetime is an hour.
+	t.Run("forty seconds left", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		setCacheControl(rec, &store.Paste{ExpiresAt: time.Now().Add(40 * time.Second)})
+
+		got := rec.Header().Get("Cache-Control")
+		age, err := strconv.Atoi(strings.TrimSuffix(
+			strings.TrimPrefix(got, "public, max-age="), ", immutable"))
+		if err != nil {
+			t.Fatalf("Cache-Control = %q, want a public max-age", got)
+		}
+		// Never above the remaining lifetime — a cache that outlives the paste
+		// is the bug this exists to prevent — and never so far below it that
+		// the trimming has stopped being a trim.
+		if age > 40 || age < 38 {
+			t.Errorf("max-age = %d, want 38..40 for a paste with forty seconds left", age)
+		}
+	})
+
+	t.Run("already gone", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		setCacheControl(rec, &store.Paste{ExpiresAt: time.Now().Add(-time.Second)})
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("Cache-Control = %q, want no-store", got)
+		}
+	})
+}
+
+func TestConfigPublishesTheLifetimeBounds(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, err := srv.Client().Get(srv.URL + "/api/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cfg map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+		t.Fatal(err)
+	}
+	// The picker's ladder and the "deletion can lag by one cleanup" note are
+	// both built from these, so a client that hard-codes them would drift.
+	for key, want := range map[string]float64{
+		"minExpirySecs":    store.MinTTL.Seconds(),
+		"maxExpirySecs":    store.MaxTTL.Seconds(),
+		"cleanupEverySecs": time.Hour.Seconds(),
+	} {
+		if got, ok := cfg[key].(float64); !ok || got != want {
+			t.Errorf("%s = %v, want %v", key, cfg[key], want)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 import * as React from "react"
 import { useLocation, useNavigate, useParams } from "react-router-dom"
 import {
+  ClockIcon,
   CopyIcon,
   DownloadIcon,
   EllipsisIcon,
@@ -11,6 +12,7 @@ import {
 import { toast } from "sonner"
 
 import { CodeView } from "@/components/code-view"
+import { NotFound } from "@/components/not-found"
 import { HeaderBar, Kbd, Shell, StatusBar } from "@/components/shell"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -24,6 +26,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { ApiError, fetchPaste, type Paste } from "@/lib/api"
 import { copyText } from "@/lib/clipboard"
+import { formatRemaining, formatRemainingShort } from "@/lib/expiry"
 import { PLAIN, languageLabel } from "@/lib/languages"
 import { clampRange, formatLineHash, parseLineHash, selectLine } from "@/lib/lines"
 import { describeTimestamp, formatTimeOfDay, formatTimestamp } from "@/lib/utils"
@@ -101,6 +104,9 @@ export function PastePage() {
   // Bare keys rather than chorded shortcuts: nothing on this page takes text
   // input, so there is nothing to collide with.
   React.useEffect(() => {
+    // NotFound brings its own shortcuts; leaving these bound as well would run
+    // both handlers for the same keypress.
+    if (error) return
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return
       const target = event.target as HTMLElement | null
@@ -130,10 +136,10 @@ export function PastePage() {
 
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [copyLink, navigate, paste])
+  }, [copyLink, error, navigate, paste])
 
   if (error) {
-    return <NotFound code={code} message={error.message} />
+    return <NotFound code={code} message={error.message} missing={error.status === 404} />
   }
 
   return (
@@ -212,14 +218,20 @@ export function PastePage() {
               reading the same link reads the same instant; the title carries
               the UTC equivalent for anyone who is not in it.
             */}
-            <time
-              className="ml-auto shrink-0 font-mono text-xs text-muted-foreground tabular-nums"
-              dateTime={paste.createdAt}
-              title={describeTimestamp(paste.createdAt) ?? undefined}
-            >
-              <span className="sm:hidden">{formatTimeOfDay(paste.createdAt)}</span>
-              <span className="hidden sm:inline">{formatTimestamp(paste.createdAt)}</span>
-            </time>
+            <div className="ml-auto flex shrink-0 items-center gap-3">
+              {/* Only shown when a lifetime was actually chosen. Its absence is
+                  not a promise of permanence, so there is nothing to say. */}
+              {paste.expiresAt && <Expiry at={paste.expiresAt} />}
+
+              <time
+                className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums"
+                dateTime={paste.createdAt}
+                title={describeTimestamp(paste.createdAt) ?? undefined}
+              >
+                <span className="sm:hidden">{formatTimeOfDay(paste.createdAt)}</span>
+                <span className="hidden sm:inline">{formatTimestamp(paste.createdAt)}</span>
+              </time>
+            </div>
           </>
         ) : (
           <span className="text-xs text-muted-foreground">Loading…</span>
@@ -337,29 +349,54 @@ function LoadingLines() {
     </div>
   )
 }
-
-function NotFound({ code, message }: { code: string; message: string }) {
-  const navigate = useNavigate()
+/**
+ * How long this paste has left.
+ *
+ * Relative rather than absolute, because "6 hours" answers the question a
+ * reader actually has; the exact instant is in the tooltip for anyone who needs
+ * to plan around it. It ticks so a page left open does not keep claiming six
+ * hours an hour later.
+ */
+function Expiry({ at }: { at: string }) {
+  const now = useMinuteTick()
+  const long = formatRemaining(at, now)
+  const short = formatRemainingShort(at, now)
 
   return (
-    <Shell>
-      <HeaderBar />
-      <main className="flex min-h-0 flex-1 items-center justify-center px-6">
-        <div className="flex max-w-sm flex-col items-center gap-4 text-center">
-          <Badge variant="secondary" className="font-mono">
-            /{code}
-          </Badge>
-          <div className="space-y-1.5">
-            <h1 className="text-lg font-semibold">Nothing here</h1>
-            <p className="text-sm text-muted-foreground">{message}</p>
-          </div>
-          <Button onClick={() => navigate("/")}>
-            <PlusIcon />
-            New paste
-            <Kbd>N</Kbd>
-          </Button>
-        </div>
-      </main>
-    </Shell>
+    <span
+      className="flex shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground tabular-nums"
+      title={
+        long
+          ? `Deleted at ${formatTimestamp(at)} (UTC+8). It stops being served then; the bytes go on the next hourly sweep.`
+          : undefined
+      }
+    >
+      <ClockIcon className="size-3.5 shrink-0 opacity-70" />
+      {long ? (
+        <>
+          <span className="sm:hidden">{short}</span>
+          <span className="hidden sm:inline">{long} left</span>
+        </>
+      ) : (
+        // Reached by leaving the tab open past the deadline. The paste is gone
+        // from the server; saying so beats counting down into negative time.
+        <span>expired</span>
+      )}
+    </span>
   )
+}
+
+/**
+ * The current time, re-read once a minute.
+ *
+ * A minute is the smallest unit the countdown displays, so anything finer would
+ * re-render for no visible change.
+ */
+function useMinuteTick(): number {
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(id)
+  }, [])
+  return now
 }

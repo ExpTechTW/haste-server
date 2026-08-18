@@ -12,10 +12,24 @@ export interface Paste {
   stored: number
   ratio: number
   createdAt: string
+  /**
+   * Present only when a lifetime was chosen at save time. Its absence means no
+   * timed deletion was asked for — not that the paste is permanent.
+   */
+  expiresAt?: string
 }
 
 export interface ServerConfig {
   maxChars: number
+  /** Bounds of a lifetime a paste may ask for, in seconds. */
+  minExpirySecs: number
+  maxExpirySecs: number
+  /**
+   * How often the server sweeps. A paste stops being served the instant its
+   * lifetime ends, but its bytes are only reclaimed on the next sweep, so this
+   * is what the UI quotes as the removal lag.
+   */
+  cleanupEverySecs: number
 }
 
 /** An error the server described in its JSON envelope. */
@@ -55,11 +69,15 @@ export function fetchConfig(): Promise<ServerConfig> {
   return request<ServerConfig>("/api/config")
 }
 
-export function createPaste(content: string, language: string): Promise<Paste> {
+export function createPaste(
+  content: string,
+  language: string,
+  expiresIn: number,
+): Promise<Paste> {
   return request<Paste>("/api/pastes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content, language }),
+    body: JSON.stringify({ content, language, expiresIn }),
   })
 }
 

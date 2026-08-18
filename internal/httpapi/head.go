@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"strings"
+	"time"
 
 	"github.com/YuYu1015/haste-server/internal/store"
 )
@@ -67,6 +68,12 @@ func pasteHead(p *store.Paste) string {
 	language := languageLabel(p.Language)
 	summary := fmt.Sprintf("%s · %s 字元", language, thousands(p.Chars))
 	description := fmt.Sprintf("在 haste 檢視這則貼文（分享碼 %s）", p.Code)
+	// A temporary paste says so in the preview, where it is most useful: the
+	// person deciding whether to open the link later is exactly the person who
+	// needs to know it will not be there.
+	if left := remaining(p); left != "" {
+		summary += " · " + left + "後刪除"
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n    <title>%s · haste</title>\n", html.EscapeString(summary))
@@ -83,6 +90,27 @@ func pasteHead(p *store.Paste) string {
 	}
 	b.WriteString("    ")
 	return b.String()
+}
+
+// remaining renders how long a paste has left, rounded down to the unit a
+// reader actually cares about. Empty when no lifetime was set, and when the
+// paste is already gone — a preview is rendered from cached metadata and might
+// outlive the paste, and "0 分鐘後刪除" is worse than saying nothing.
+func remaining(p *store.Paste) string {
+	if p.ExpiresAt.IsZero() {
+		return ""
+	}
+	left := time.Until(p.ExpiresAt)
+	switch {
+	case left <= 0:
+		return ""
+	case left < time.Hour:
+		return fmt.Sprintf("%d 分鐘", int(left.Minutes()))
+	case left < 24*time.Hour:
+		return fmt.Sprintf("%d 小時", int(left.Hours()))
+	default:
+		return fmt.Sprintf("%d 天", int(left.Hours()/24))
+	}
 }
 
 // languageLabel turns a stored language id into something worth reading. The

@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS pastes (
     raw_bytes   INTEGER NOT NULL,         -- decoded UTF-8 length
     language    TEXT    NOT NULL DEFAULT '',
     created_at  INTEGER NOT NULL,         -- unix seconds
-    accessed_at INTEGER NOT NULL          -- unix seconds; drives LRU eviction
+    accessed_at INTEGER NOT NULL,         -- unix seconds; drives LRU eviction
+    expires_at  INTEGER                   -- unix seconds; NULL = no expiry set
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS pastes_code_idx ON pastes (code);
@@ -35,17 +36,3 @@ CREATE UNIQUE INDEX IF NOT EXISTS pastes_code_idx ON pastes (code);
 -- same column, so this index carries both.
 CREATE INDEX IF NOT EXISTS pastes_accessed_idx ON pastes (accessed_at);
 CREATE INDEX IF NOT EXISTS pastes_created_idx ON pastes (created_at);
-
--- A paste's content is write-once, enforced in the database rather than only in
--- the handlers, so no future code path (or sqlite3 shell) can quietly rewrite a
--- code that has already been shared.
---
--- accessed_at is deliberately absent from the column list: it is bookkeeping,
--- not content, and LRU eviction needs it to move. Everything that a reader
--- could actually observe stays frozen.
-CREATE TRIGGER IF NOT EXISTS pastes_immutable
-BEFORE UPDATE OF seq, code, body, codec, bytes, chars, raw_bytes, language, created_at
-ON pastes
-BEGIN
-    SELECT RAISE(ABORT, 'pastes are immutable');
-END;

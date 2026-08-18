@@ -36,6 +36,9 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
+//go:embed constraints.sql
+var constraintsSQL string
+
 const (
 	// mmapBytes is shared across connections (unlike the page cache), so it is
 	// set generously and independently of the configured cache size.
@@ -45,6 +48,20 @@ const (
 	// the steady state of a full database only one or two rows have to go, so
 	// this is a ceiling rather than a typical cost.
 	evictBatch = 64
+
+	// NoExpiry is the ttl for a paste that asks for no lifetime. It is not a
+	// promise of permanence: the storage cap and the operator's own TTLs still
+	// apply, and either can reclaim the paste at any time.
+	NoExpiry = time.Duration(0)
+
+	// MinTTL and MaxTTL bound the lifetime a paste may ask for.
+	//
+	// Below an hour the cleanup interval, not the request, would decide when the
+	// paste actually goes, so the number on the screen would be fiction. Above a
+	// month a lifetime stops being a lifetime and starts being the storage cap's
+	// problem, which already handles it.
+	MinTTL = time.Hour
+	MaxTTL = 30 * 24 * time.Hour
 )
 
 var (
@@ -56,6 +73,8 @@ var (
 	ErrTooLarge = errors.New("store: paste exceeds character limit")
 	// ErrNoRoom means a single paste could not fit inside the whole byte cap.
 	ErrNoRoom = errors.New("store: paste does not fit within the storage cap")
+	// ErrBadTTL means the requested lifetime was outside [MinTTL, MaxTTL].
+	ErrBadTTL = errors.New("store: requested lifetime is out of range")
 	// ErrBusy means too many writes are already queued and this one was shed
 	// rather than added to a line that is no longer worth joining.
 	ErrBusy = errors.New("store: write queue is full")
@@ -71,6 +90,10 @@ type Paste struct {
 	RawBytes   int
 	StoredSize int
 	CreatedAt  time.Time
+	// ExpiresAt is when the paste stops being served. Zero means no lifetime was
+	// requested, which is not a promise of permanence: the storage cap and the
+	// operator's TTLs still apply.
+	ExpiresAt time.Time
 }
 
 // Stats summarises the corpus, for the stats endpoint.
@@ -84,6 +107,7 @@ type Stats struct {
 // SweepResult reports what one cleanup pass removed.
 type SweepResult struct {
 	AccessFlushed int   // rows whose access time was written back
+	Expired       int64 // rows removed because their own lifetime ran out
 	SpaceEvicted  int64 // rows removed to stay under the byte cap
 	AccessExpired int64 // rows removed by the last-access TTL
 	CreateExpired int64 // rows removed by the creation TTL
@@ -92,7 +116,7 @@ type SweepResult struct {
 
 // Removed reports whether the pass deleted anything.
 func (r SweepResult) Removed() int64 {
-	return r.SpaceEvicted + r.AccessExpired + r.CreateExpired
+	return r.Expired + r.SpaceEvicted + r.AccessExpired + r.CreateExpired
 }
 
 // Options configures a Store.
@@ -162,6 +186,14 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		w.Close()
 		return nil, fmt.Errorf("store: apply schema: %w", err)
 	}
+	if err := addMissingColumns(ctx, w); err != nil {
+		w.Close()
+		return nil, err
+	}
+	if _, err := w.ExecContext(ctx, constraintsSQL); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("store: apply constraints: %w", err)
+	}
 	// One scan at startup so the running total can never drift from reality.
 	if _, err := w.ExecContext(ctx,
 		`UPDATE counters SET value = COALESCE((SELECT SUM(bytes) FROM pastes), 0)
@@ -193,6 +225,49 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 		s.maxQueued = int64(opts.WriteQueue)
 	}
 	return s, nil
+}
+
+// addedColumns are columns added to pastes after the first release, in the
+// order they were added. CREATE TABLE IF NOT EXISTS does nothing to a table
+// that already exists, so a database written by an older build needs each of
+// these applied by hand before anything can reference them.
+var addedColumns = []struct{ name, ddl string }{
+	{"expires_at", "ALTER TABLE pastes ADD COLUMN expires_at INTEGER"},
+}
+
+// addMissingColumns brings an existing database up to the current shape.
+//
+// The column list is read rather than the ALTER being run and its duplicate
+// error swallowed: an error that is expected in normal operation is an error
+// nobody reads, and it would hide a genuinely broken migration.
+func addMissingColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT name FROM pragma_table_info('pastes')`)
+	if err != nil {
+		return fmt.Errorf("store: read table shape: %w", err)
+	}
+	defer rows.Close()
+
+	have := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("store: read table shape: %w", err)
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("store: read table shape: %w", err)
+	}
+
+	for _, col := range addedColumns {
+		if have[col.name] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, col.ddl); err != nil {
+			return fmt.Errorf("store: add column %s: %w", col.name, err)
+		}
+	}
+	return nil
 }
 
 // acquireWrite admits one write, or refuses immediately when the queue is
@@ -235,13 +310,19 @@ func (s *Store) Close() error {
 
 // Create compresses and stores content, allocating the shortest unused code and
 // evicting least-recently-used pastes if the byte cap needs the room.
-func (s *Store) Create(ctx context.Context, content, language string) (*Paste, error) {
+//
+// A ttl of zero records no lifetime; anything else must fall within
+// [MinTTL, MaxTTL] and is written as an absolute instant, so a paste's deadline
+// does not move if the server restarts.
+func (s *Store) Create(ctx context.Context, content, language string, ttl time.Duration) (*Paste, error) {
 	chars := utf8.RuneCountInString(content)
 	switch {
 	case chars == 0:
 		return nil, ErrEmpty
 	case chars > s.opts.MaxChars:
 		return nil, fmt.Errorf("%w: %d > %d", ErrTooLarge, chars, s.opts.MaxChars)
+	case ttl != 0 && (ttl < MinTTL || ttl > MaxTTL):
+		return nil, fmt.Errorf("%w: %s not in [%s, %s]", ErrBadTTL, ttl, MinTTL, MaxTTL)
 	}
 
 	// Admission is taken before compressing, because compression is the
@@ -266,6 +347,15 @@ func (s *Store) Create(ctx context.Context, content, language string) (*Paste, e
 		RawBytes:   len(raw),
 		StoredSize: len(body),
 		CreatedAt:  now,
+	}
+	// Stored as NULL rather than 0 so "no lifetime" is a distinct value in the
+	// column, and every query can say expires_at IS NULL instead of comparing
+	// against a sentinel.
+	var expires *int64
+	if ttl > 0 {
+		p.ExpiresAt = now.Add(ttl)
+		unix := p.ExpiresAt.Unix()
+		expires = &unix
 	}
 
 	tx, err := s.w.BeginTx(ctx, nil)
@@ -308,10 +398,10 @@ func (s *Store) Create(ctx context.Context, content, language string) (*Paste, e
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO pastes (seq, code, body, codec, bytes, chars, raw_bytes, language, created_at, accessed_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO pastes (seq, code, body, codec, bytes, chars, raw_bytes, language, created_at, accessed_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Seq, p.Code, body, codec, size, p.Chars, p.RawBytes, p.Language,
-		p.CreatedAt.Unix(), p.CreatedAt.Unix(),
+		p.CreatedAt.Unix(), p.CreatedAt.Unix(), expires,
 	); err != nil {
 		return nil, fmt.Errorf("store: insert paste: %w", err)
 	}
@@ -324,8 +414,10 @@ func (s *Store) Create(ctx context.Context, content, language string) (*Paste, e
 	return p, nil
 }
 
-// Get returns a paste and its decompressed body. Rows past either TTL are
-// treated as missing even before the sweeper has removed them.
+// Get returns a paste and its decompressed body. A row past its own lifetime or
+// past either operator TTL is treated as missing even before the sweeper has
+// removed it, so a link dies exactly when it was said it would rather than
+// whenever cleanup next runs.
 func (s *Store) Get(ctx context.Context, code string) (*Paste, string, error) {
 	if !id.Valid(code) {
 		return nil, "", ErrNotFound
@@ -340,15 +432,17 @@ func (s *Store) Get(ctx context.Context, code string) (*Paste, string, error) {
 		body    []byte
 		codec   int
 		created int64
+		expires sql.NullInt64
 	)
 	err := s.r.QueryRowContext(ctx,
-		`SELECT seq, code, body, codec, chars, raw_bytes, language, created_at
+		`SELECT seq, code, body, codec, chars, raw_bytes, language, created_at, expires_at
 		   FROM pastes
 		  WHERE code = ?
+		    AND (expires_at IS NULL OR expires_at > ?)
 		    AND (? = 0 OR accessed_at > ?)
 		    AND (? = 0 OR created_at > ?)`,
-		code, accessCutoff, accessCutoff, createCutoff, createCutoff,
-	).Scan(&p.Seq, &p.Code, &body, &codec, &p.Chars, &p.RawBytes, &p.Language, &created)
+		code, now.Unix(), accessCutoff, accessCutoff, createCutoff, createCutoff,
+	).Scan(&p.Seq, &p.Code, &body, &codec, &p.Chars, &p.RawBytes, &p.Language, &created, &expires)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, "", ErrNotFound
@@ -358,6 +452,7 @@ func (s *Store) Get(ctx context.Context, code string) (*Paste, string, error) {
 
 	p.StoredSize = len(body)
 	p.CreatedAt = time.Unix(created, 0).UTC()
+	p.ExpiresAt = expiryTime(expires)
 
 	// The limit is the recorded size: anything else is a corrupt row, not a
 	// decode this process should spend memory on.
@@ -387,15 +482,17 @@ func (s *Store) Meta(ctx context.Context, code string) (*Paste, error) {
 	var (
 		p       Paste
 		created int64
+		expires sql.NullInt64
 	)
 	err := s.r.QueryRowContext(ctx,
-		`SELECT seq, code, bytes, chars, raw_bytes, language, created_at
+		`SELECT seq, code, bytes, chars, raw_bytes, language, created_at, expires_at
 		   FROM pastes
 		  WHERE code = ?
+		    AND (expires_at IS NULL OR expires_at > ?)
 		    AND (? = 0 OR accessed_at > ?)
 		    AND (? = 0 OR created_at > ?)`,
-		code, accessCutoff, accessCutoff, createCutoff, createCutoff,
-	).Scan(&p.Seq, &p.Code, &p.StoredSize, &p.Chars, &p.RawBytes, &p.Language, &created)
+		code, now.Unix(), accessCutoff, accessCutoff, createCutoff, createCutoff,
+	).Scan(&p.Seq, &p.Code, &p.StoredSize, &p.Chars, &p.RawBytes, &p.Language, &created, &expires)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, ErrNotFound
@@ -404,7 +501,16 @@ func (s *Store) Meta(ctx context.Context, code string) (*Paste, error) {
 	}
 
 	p.CreatedAt = time.Unix(created, 0).UTC()
+	p.ExpiresAt = expiryTime(expires)
 	return &p, nil
+}
+
+// expiryTime converts a nullable column into the zero time for "no lifetime".
+func expiryTime(v sql.NullInt64) time.Time {
+	if !v.Valid {
+		return time.Time{}
+	}
+	return time.Unix(v.Int64, 0).UTC()
 }
 
 // recordAccess queues a row's access time for the next flush.
@@ -451,9 +557,12 @@ func (s *Store) FlushAccess(ctx context.Context) (int, error) {
 	return len(pending), nil
 }
 
-// Sweep applies the retention rules in priority order: the byte cap first,
-// because it is the only hard guarantee, then the last-access TTL, then the
-// creation TTL. A disabled rule is skipped entirely.
+// Sweep applies the retention rules in priority order.
+//
+// A paste's own lifetime goes first, because it is the one deletion that was
+// promised to a person. Then the space cap, because it is the only hard
+// guarantee the operator has, then the last-access TTL, then the creation TTL.
+// A disabled rule is skipped entirely.
 //
 // The cap is already enforced on every write, so its pass here normally removes
 // nothing; it exists to converge after the cap has been lowered.
@@ -473,6 +582,17 @@ func (s *Store) Sweep(ctx context.Context) (SweepResult, error) {
 	}
 	defer tx.Rollback()
 
+	// Pastes that asked for a lifetime go first. They already stopped being
+	// served the moment it ran out, so removing them before anything else is
+	// weighed means their bytes count towards the cap rather than pushing a
+	// live paste out of it.
+	now := time.Now()
+	expired, err := deleteWhere(ctx, tx, "expires_at IS NOT NULL AND expires_at <= ?", now.Unix())
+	if err != nil {
+		return result, err
+	}
+	result.Expired = expired
+
 	if s.opts.MaxBytes > 0 {
 		stored, err := storedBytes(ctx, tx)
 		if err != nil {
@@ -487,7 +607,6 @@ func (s *Store) Sweep(ctx context.Context) (SweepResult, error) {
 		}
 	}
 
-	now := time.Now()
 	if c := cutoff(now, s.opts.TTLAccess); c > 0 {
 		removed, err := deleteWhere(ctx, tx, "accessed_at <= ?", c)
 		if err != nil {

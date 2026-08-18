@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,9 @@ var languageRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+#._-]{0,31}$`)
 type createRequest struct {
 	Content  string `json:"content"`
 	Language string `json:"language"`
+	// ExpiresIn is a lifetime in seconds. Absent or 0 means none is requested;
+	// anything else has to fall inside [store.MinTTL, store.MaxTTL].
+	ExpiresIn int64 `json:"expiresIn"`
 }
 
 type pasteResponse struct {
@@ -34,9 +38,13 @@ type pasteResponse struct {
 	Bytes    int     `json:"bytes"`
 	Stored   int     `json:"stored"`
 	Ratio    float64 `json:"ratio"`
-	// No expiry is published, because none can be honoured: a paste can be
-	// evicted as soon as the store needs its bytes back.
+
 	CreatedAt time.Time `json:"createdAt"`
+	// ExpiresAt is present only when a lifetime was asked for at save time.
+	// Its absence is not a promise of permanence — the storage cap can still
+	// reclaim any paste — which is why the field is omitted rather than sent as
+	// null with a meaning attached to it.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
 }
 
 type errorResponse struct {
@@ -49,11 +57,20 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleConfig lets the frontend enforce the same limits the server does,
-// instead of hard-coding a copy that can drift. Retention is deliberately not
-// published: the client must not show a lifetime the server cannot promise.
+// instead of hard-coding a copy that can drift.
+//
+// The retention numbers published here are only the bounds of a lifetime a
+// paste may ask for, plus how often cleanup runs. No default retention is
+// published, because a paste that asks for nothing gets no promise: the storage
+// cap can reclaim it whenever it needs the bytes.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	writeJSON(w, http.StatusOK, map[string]any{"maxChars": s.cfg.MaxChars})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"maxChars":         s.cfg.MaxChars,
+		"minExpirySecs":    int64(store.MinTTL.Seconds()),
+		"maxExpirySecs":    int64(store.MaxTTL.Seconds()),
+		"cleanupEverySecs": int64(s.cfg.CleanupInterval.Seconds()),
+	})
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
@@ -132,15 +149,42 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (*store.Paste, s
 	} else {
 		req.Content = string(body)
 		req.Language = r.URL.Query().Get("language")
+		// The raw path has no envelope to carry a lifetime, so the query string
+		// does: ?expiresIn=1h for a person typing curl, ?expiresIn=3600 for a
+		// script that would rather not build a duration string.
+		ttl, err := parseExpiresIn(r.URL.Query().Get("expiresIn"))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "bad_expiry", err.Error())
+			return nil, "", false
+		}
+		req.ExpiresIn = int64(ttl.Seconds())
 	}
 
-	p, err := s.store.Create(r.Context(), req.Content, normalizeLanguage(req.Language))
+	p, err := s.store.Create(r.Context(), req.Content, normalizeLanguage(req.Language),
+		time.Duration(req.ExpiresIn)*time.Second)
 	if err != nil {
 		s.fail(w, err)
 		return nil, "", false
 	}
-	s.log.Info("paste created", "code", p.Code, "chars", p.Chars, "stored", p.StoredSize)
+	s.log.Info("paste created",
+		"code", p.Code, "chars", p.Chars, "stored", p.StoredSize, "expires", p.ExpiresAt)
 	return p, req.Content, true
+}
+
+// parseExpiresIn reads a lifetime written either as a plain count of seconds or
+// as a Go duration. Empty means none was asked for.
+func parseExpiresIn(v string) (time.Duration, error) {
+	if v == "" {
+		return 0, nil
+	}
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+		return time.Duration(secs) * time.Second, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, errors.New("expiresIn must be a number of seconds or a duration such as 1h")
+	}
+	return d, nil
 }
 
 func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
@@ -152,8 +196,7 @@ func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
 	resp := s.describe(r, p)
 	resp.Content = content
 	noIndex(w)
-	// Pastes are immutable, so a hit can be cached until it expires.
-	w.Header().Set("Cache-Control", "public, max-age=300, immutable")
+	setCacheControl(w, p)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -168,7 +211,7 @@ func (s *Server) handleLegacyRead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
-	_, content, err := s.store.Get(r.Context(), r.PathValue("code"))
+	paste, content, err := s.store.Get(r.Context(), r.PathValue("code"))
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -180,7 +223,7 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 	// a sandboxed, script-free CSP keeps a paste of HTML inert.
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 	h.Set("Content-Disposition", "inline")
-	h.Set("Cache-Control", "public, max-age=300, immutable")
+	setCacheControl(w, paste)
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, content)
 }
@@ -203,7 +246,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/plain; charset=utf-8")
 	h.Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
-	h.Set("Cache-Control", "public, max-age=300, immutable")
+	setCacheControl(w, p)
 	w.WriteHeader(http.StatusOK)
 	io.WriteString(w, content)
 }
@@ -223,6 +266,10 @@ func (s *Server) describe(r *http.Request, p *store.Paste) pasteResponse {
 		Bytes:       p.RawBytes,
 		Stored:      p.StoredSize,
 		CreatedAt:   p.CreatedAt,
+	}
+	if !p.ExpiresAt.IsZero() {
+		at := p.ExpiresAt
+		resp.ExpiresAt = &at
 	}
 	if p.StoredSize > 0 {
 		resp.Ratio = round2(float64(p.RawBytes) / float64(p.StoredSize))
@@ -255,6 +302,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "no paste with that code")
 	case errors.Is(err, store.ErrEmpty):
 		writeError(w, http.StatusBadRequest, "empty", "paste is empty")
+	case errors.Is(err, store.ErrBadTTL):
+		writeError(w, http.StatusBadRequest, "bad_expiry", err.Error())
 	case errors.Is(err, store.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
 	case errors.Is(err, store.ErrBusy):
@@ -268,6 +317,31 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		s.log.Error("request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal", "internal server error")
 	}
+}
+
+// cacheSeconds is how long a paste may be held by a shared cache. Pastes are
+// immutable, so the only thing that can change under a URL is the paste ceasing
+// to exist.
+const cacheSeconds = 300
+
+// setCacheControl caches a paste for as long as it is certain to still be there.
+//
+// A paste that expires in forty seconds must not be cached for five minutes:
+// the edge would keep serving a link the server has already retired. Trimming
+// the lifetime to whatever is left is what makes the expiry hold everywhere and
+// not just at the origin.
+func setCacheControl(w http.ResponseWriter, p *store.Paste) {
+	age := cacheSeconds
+	if p != nil && !p.ExpiresAt.IsZero() {
+		if left := int(time.Until(p.ExpiresAt).Seconds()); left < age {
+			age = max(left, 0)
+		}
+	}
+	if age == 0 {
+		w.Header().Set("Cache-Control", "no-store")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(age)+", immutable")
 }
 
 // noIndex asks search engines not to list a paste, while still allowing the
