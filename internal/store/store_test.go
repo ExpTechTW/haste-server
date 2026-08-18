@@ -49,7 +49,7 @@ func TestCreateAndGetRoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	content := "package main\n\nfunc main() {\n\tprintln(\"héllo, 世界\")\n}\n"
-	p, err := st.Create(ctx, content, "go", NoExpiry)
+	p, err := st.Create(ctx, content, "go", "", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestCodesAreMinimumLengthAndUnordered(t *testing.T) {
 
 	var codes []string
 	for i := 0; i < 20; i++ {
-		p, err := st.Create(ctx, "x", "", NoExpiry)
+		p, err := st.Create(ctx, "x", "", "", NoExpiry)
 		if err != nil {
 			t.Fatalf("Create #%d: %v", i, err)
 		}
@@ -102,14 +102,14 @@ func TestLimits(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	if _, err := st.Create(ctx, "", "", NoExpiry); !errors.Is(err, ErrEmpty) {
+	if _, err := st.Create(ctx, "", "", "", NoExpiry); !errors.Is(err, ErrEmpty) {
 		t.Errorf("empty paste: got %v, want ErrEmpty", err)
 	}
 	// 4001 multi-byte runes: proves the cap counts characters, not bytes.
-	if _, err := st.Create(ctx, strings.Repeat("界", 4001), "", NoExpiry); !errors.Is(err, ErrTooLarge) {
+	if _, err := st.Create(ctx, strings.Repeat("界", 4001), "", "", NoExpiry); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("oversized paste: got %v, want ErrTooLarge", err)
 	}
-	if _, err := st.Create(ctx, strings.Repeat("界", 4000), "", NoExpiry); err != nil {
+	if _, err := st.Create(ctx, strings.Repeat("界", 4000), "", "", NoExpiry); err != nil {
 		t.Errorf("paste at exactly the limit should be accepted: %v", err)
 	}
 }
@@ -130,7 +130,7 @@ func TestPasteContentIsImmutable(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "original", "", NoExpiry)
+	p, err := st.Create(ctx, "original", "", "", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -149,6 +149,7 @@ func TestPasteContentIsImmutable(t *testing.T) {
 		{"chars", int64(1)},
 		{"raw_bytes", int64(1)},
 		{"language", "tampered"},
+		{"title", "tampered"},
 		{"created_at", int64(0)},
 		// A lifetime is a promise made to whoever holds the link, so it is
 		// frozen the same way the content is — in both directions.
@@ -178,7 +179,7 @@ func TestAccessTimeRemainsWritable(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "content", "", NoExpiry)
+	p, err := st.Create(ctx, "content", "", "", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -228,7 +229,7 @@ func TestSpaceCapHoldsOnEveryWrite(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 400; i++ {
-		if _, err := st.Create(ctx, fmt.Sprintf("paste number %d %s", i, strings.Repeat("x", 900)), "", NoExpiry); err != nil {
+		if _, err := st.Create(ctx, fmt.Sprintf("paste number %d %s", i, strings.Repeat("x", 900)), "", "", NoExpiry); err != nil {
 			t.Fatalf("Create #%d: %v", i, err)
 		}
 		stored := storedBytesNow(t, st)
@@ -255,11 +256,11 @@ func TestEvictionRemovesLeastRecentlyUsed(t *testing.T) {
 
 	filler := strings.Repeat("unique-filler-content ", 40)
 
-	oldest, err := st.Create(ctx, "oldest paste "+filler, "", NoExpiry)
+	oldest, err := st.Create(ctx, "oldest paste "+filler, "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	middle, err := st.Create(ctx, "middle paste "+filler, "", NoExpiry)
+	middle, err := st.Create(ctx, "middle paste "+filler, "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +309,7 @@ func TestRejectsPasteLargerThanTheWholeCap(t *testing.T) {
 	}
 	content := string([]rune(b.String())[:4000])
 
-	if _, err := st.Create(ctx, content, "", NoExpiry); !errors.Is(err, ErrNoRoom) {
+	if _, err := st.Create(ctx, content, "", "", NoExpiry); !errors.Is(err, ErrNoRoom) {
 		t.Errorf("got %v, want ErrNoRoom", err)
 	}
 }
@@ -317,7 +318,7 @@ func TestTTLsAreDisabledByDefault(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "permanent", "", NoExpiry)
+	p, err := st.Create(ctx, "permanent", "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,11 +341,11 @@ func TestAccessTTL(t *testing.T) {
 	st := newTestStore(t, func(o *Options) { o.TTLAccess = time.Hour })
 	ctx := context.Background()
 
-	stale, err := st.Create(ctx, "stale", "", NoExpiry)
+	stale, err := st.Create(ctx, "stale", "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := st.Create(ctx, "fresh", "", NoExpiry)
+	fresh, err := st.Create(ctx, "fresh", "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +372,7 @@ func TestCreateTTL(t *testing.T) {
 	st := newTestStore(t, func(o *Options) { o.TTLCreate = time.Hour })
 	ctx := context.Background()
 
-	old, err := st.Create(ctx, "old", "", NoExpiry)
+	old, err := st.Create(ctx, "old", "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +410,7 @@ func TestReadsDoNotWriteUntilFlushed(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "content", "", NoExpiry)
+	p, err := st.Create(ctx, "content", "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +445,7 @@ func TestConcurrentCreatesGetDistinctCodes(t *testing.T) {
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
 		go func() {
-			p, err := st.Create(ctx, "concurrent", "", NoExpiry)
+			p, err := st.Create(ctx, "concurrent", "", "", NoExpiry)
 			if err != nil {
 				errs <- err
 				return
@@ -539,7 +540,7 @@ func TestAcceptsAClassicSizedPaste(t *testing.T) {
 	}
 	content := string([]rune(b.String())[:limit])
 
-	p, err := st.Create(ctx, content, "log", NoExpiry)
+	p, err := st.Create(ctx, content, "log", "", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create at the limit: %v", err)
 	}
@@ -561,7 +562,7 @@ func TestAcceptsAClassicSizedPaste(t *testing.T) {
 		limit, got.RawBytes, got.StoredSize, float64(got.RawBytes)/float64(got.StoredSize))
 
 	// One character over is still refused, at the new limit as at the old.
-	if _, err := st.Create(ctx, content+"x", "", NoExpiry); !errors.Is(err, ErrTooLarge) {
+	if _, err := st.Create(ctx, content+"x", "", "", NoExpiry); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("one character over the limit: got %v, want ErrTooLarge", err)
 	}
 }
@@ -571,7 +572,7 @@ func TestLifetimeIsRecordedAsAnInstant(t *testing.T) {
 	ctx := context.Background()
 
 	before := time.Now()
-	p, err := st.Create(ctx, "temporary", "", 6*time.Hour)
+	p, err := st.Create(ctx, "temporary", "", "", 6*time.Hour)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -597,7 +598,7 @@ func TestNoLifetimeLeavesTheColumnNull(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, "permanent", "", NoExpiry)
+	p, err := st.Create(ctx, "permanent", "", "", NoExpiry)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -633,13 +634,13 @@ func TestCreateAcceptsOnlyTheLadder(t *testing.T) {
 		30*24*time.Hour - time.Second, // just short of it
 		-time.Hour,
 	} {
-		if _, err := st.Create(ctx, "content", "", ttl); !errors.Is(err, ErrBadTTL) {
+		if _, err := st.Create(ctx, "content", "", "", ttl); !errors.Is(err, ErrBadTTL) {
 			t.Errorf("Create with ttl %s: err = %v, want ErrBadTTL", ttl, err)
 		}
 	}
 
 	for _, ttl := range append([]time.Duration{NoExpiry}, TTLOptions...) {
-		if _, err := st.Create(ctx, "content", "", ttl); err != nil {
+		if _, err := st.Create(ctx, "content", "", "", ttl); err != nil {
 			t.Errorf("Create with ttl %s: %v", ttl, err)
 		}
 	}
@@ -670,7 +671,7 @@ func TestExpiredPasteStopsBeingServedBeforeTheSweep(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	live, err := st.Create(ctx, "still here", "", TTLOptions[0])
+	live, err := st.Create(ctx, "still here", "", "", TTLOptions[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +735,7 @@ func expiringRow(t *testing.T, st *Store, content string, at time.Time) string {
 	t.Helper()
 	ctx := context.Background()
 
-	p, err := st.Create(ctx, content, "", NoExpiry)
+	p, err := st.Create(ctx, content, "", "", NoExpiry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +820,7 @@ func TestOpensADatabaseWrittenBeforeExpiries(t *testing.T) {
 	}
 
 	// The new column works for writes...
-	fresh, err := st.Create(ctx, "temporary", "", TTLOptions[0])
+	fresh, err := st.Create(ctx, "temporary", "", "", TTLOptions[0])
 	if err != nil {
 		t.Fatalf("Create with a lifetime after migrating: %v", err)
 	}
@@ -831,5 +832,87 @@ func TestOpensADatabaseWrittenBeforeExpiries(t *testing.T) {
 	if _, err := st.w.ExecContext(ctx,
 		`UPDATE pastes SET expires_at = 0 WHERE seq = ?`, fresh.Seq); err == nil {
 		t.Error("expires_at is updatable; the old trigger survived the migration")
+	}
+}
+
+func TestCleanTitle(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", ""},
+		{"prod crash log", "prod crash log"},
+		{"  spaced  ", "spaced"},
+		{"   ", ""},
+		// Fifteen characters, not fifteen bytes: a CJK title is not a third of
+		// the length an English one gets.
+		{"一二三四五六七八九十一二三四五", "一二三四五六七八九十一二三四五"},
+		{"123456789012345", "123456789012345"},
+		// Zero-width joiner stays: it is what holds a family emoji together,
+		// and it is not a reordering character.
+		{"deploy \U0001F468\u200D\U0001F4BB", "deploy \U0001F468\u200D\U0001F4BB"},
+	} {
+		got, err := CleanTitle(tc.in)
+		if err != nil {
+			t.Errorf("CleanTitle(%q): %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("CleanTitle(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	for _, in := range []string{
+		"1234567890123456",
+		"一二三四五六七八九十一二三四五六",
+		// Newlines would split the meta tag this ends up inside, and the rest
+		// are invisible characters occupying the fifteen someone else can read.
+		"two\nlines",
+		"tab\there",
+		"null\x00byte",
+		// Bidi overrides reverse everything after them, which in a link preview
+		// in someone else's chat window is a spoofing tool.
+		"\u202Eoverride",
+		"\u200Fmixed",
+		"\u2066isolate",
+	} {
+		if _, err := CleanTitle(in); !errors.Is(err, ErrBadTitle) {
+			t.Errorf("CleanTitle(%q) was accepted", in)
+		}
+	}
+}
+
+func TestTitleRoundTrips(t *testing.T) {
+	st := newTestStore(t, nil)
+	ctx := context.Background()
+
+	p, err := st.Create(ctx, "content", "go", "  prod crash log  ", NoExpiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Title != "prod crash log" {
+		t.Errorf("Title = %q, want it trimmed", p.Title)
+	}
+
+	got, _, err := st.Get(ctx, p.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "prod crash log" {
+		t.Errorf("Title after reload = %q", got.Title)
+	}
+	meta, err := st.Meta(ctx, p.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Meta skips the body, and the link preview needs the title, so it has to
+	// come back from that path too.
+	if meta.Title != "prod crash log" {
+		t.Errorf("Title from Meta = %q", meta.Title)
+	}
+
+	untitled, err := st.Create(ctx, "content", "", "", NoExpiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if untitled.Title != "" {
+		t.Errorf("Title = %q for a paste given none", untitled.Title)
 	}
 }

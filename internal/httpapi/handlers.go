@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -23,6 +24,9 @@ var languageRe = regexp.MustCompile(`^[a-z0-9][a-z0-9+#._-]{0,31}$`)
 type createRequest struct {
 	Content  string `json:"content"`
 	Language string `json:"language"`
+	// Title is optional and at most store.MaxTitleChars characters. When set it
+	// replaces the generated summary in the page title and link preview.
+	Title string `json:"title"`
 	// ExpiresIn is a lifetime in seconds. Absent or 0 means none is requested;
 	// anything else has to fall inside [store.MinTTL, store.MaxTTL].
 	ExpiresIn int64 `json:"expiresIn"`
@@ -36,6 +40,7 @@ type pasteResponse struct {
 	Filename    string `json:"filename"`
 
 	Language string  `json:"language,omitempty"`
+	Title    string  `json:"title,omitempty"`
 	Content  string  `json:"content,omitempty"`
 	Chars    int     `json:"chars"`
 	Bytes    int     `json:"bytes"`
@@ -81,6 +86,11 @@ var badExpiryMessage = func() string {
 		" seconds; the query string also accepts these as durations, e.g. 6h or 30d"
 }()
 
+// badTitleMessage names the limit rather than restating the rule, because the
+// limit is the part a caller can act on.
+var badTitleMessage = fmt.Sprintf(
+	"title must be at most %d characters and hold no control characters", store.MaxTitleChars)
+
 // handleConfig lets the frontend enforce the same limits the server does,
 // instead of hard-coding a copy that can drift.
 //
@@ -95,6 +105,7 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	cfg := map[string]any{
 		"maxChars":          s.cfg.MaxChars,
+		"maxTitleChars":     store.MaxTitleChars,
 		"expiryOptionsSecs": expiryOptionsSecs,
 		"cleanupEverySecs":  int64(s.cfg.CleanupInterval.Seconds()),
 	}
@@ -251,6 +262,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (*store.Paste, s
 	} else {
 		req.Content = string(body)
 		req.Language = r.URL.Query().Get("language")
+		req.Title = r.URL.Query().Get("title")
 		// The raw path has no envelope to carry a lifetime, so the query string
 		// does: ?expiresIn=1h for a person typing curl, ?expiresIn=3600 for a
 		// script that would rather not build a duration string.
@@ -262,7 +274,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (*store.Paste, s
 		req.ExpiresIn = int64(ttl.Seconds())
 	}
 
-	p, err := s.store.Create(r.Context(), req.Content, normalizeLanguage(req.Language),
+	p, err := s.store.Create(r.Context(), req.Content, normalizeLanguage(req.Language), req.Title,
 		time.Duration(req.ExpiresIn)*time.Second)
 	if err != nil {
 		s.fail(w, err)
@@ -378,6 +390,7 @@ func (s *Server) describe(r *http.Request, p *store.Paste) pasteResponse {
 		DownloadURL: base + "/download/" + p.Code,
 		Filename:    p.Code + "." + extensionFor(p.Language),
 		Language:    p.Language,
+		Title:       p.Title,
 		Chars:       p.Chars,
 		Bytes:       p.RawBytes,
 		Stored:      p.StoredSize,
@@ -418,6 +431,8 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "no paste with that code")
 	case errors.Is(err, store.ErrEmpty):
 		writeError(w, http.StatusBadRequest, "empty", "paste is empty")
+	case errors.Is(err, store.ErrBadTitle):
+		writeError(w, http.StatusBadRequest, "bad_title", badTitleMessage)
 	case errors.Is(err, store.ErrBadTTL):
 		writeError(w, http.StatusBadRequest, "bad_expiry", badExpiryMessage)
 	case errors.Is(err, store.ErrTooLarge):

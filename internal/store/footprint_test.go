@@ -49,7 +49,7 @@ func TestStorageFootprint(t *testing.T) {
 			ctx := context.Background()
 			var rawTotal, storedTotal int
 			for i := 0; i < pastes; i++ {
-				p, err := st.Create(ctx, kind.Generate(i), "", NoExpiry)
+				p, err := st.Create(ctx, kind.Generate(i), "", "", NoExpiry)
 				if err != nil {
 					t.Fatalf("create %d: %v", i, err)
 				}

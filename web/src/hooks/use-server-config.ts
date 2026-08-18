@@ -8,6 +8,7 @@ import { fetchConfig, type ServerConfig } from "@/lib/api"
  */
 const FALLBACK: ServerConfig = {
   maxChars: 40_000,
+  maxTitleChars: 15,
   expiryOptionsSecs: [3600, 21600, 43200, 86400, 259200, 604800, 1209600, 2592000],
   cleanupEverySecs: 3600,
 }

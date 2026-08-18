@@ -6,6 +6,8 @@ export interface Paste {
   /** Share code plus the extension its language implies, e.g. "k7Qm2Xp9.dart". */
   filename: string
   language?: string
+  /** The name given at save time, if any. */
+  title?: string
   content?: string
   chars: number
   bytes: number
@@ -21,6 +23,8 @@ export interface Paste {
 
 export interface ServerConfig {
   maxChars: number
+  /** Longest title the server will accept, in code points. */
+  maxTitleChars: number
   /**
    * Every lifetime the API accepts, in seconds, ascending. Anything else is a
    * 400, so the picker is built from this rather than from a range.
@@ -81,15 +85,16 @@ export function fetchConfig(): Promise<ServerConfig> {
   return request<ServerConfig>("/api/config")
 }
 
-export function createPaste(
-  content: string,
-  language: string,
-  expiresIn: number,
-): Promise<Paste> {
+export function createPaste(paste: {
+  content: string
+  language: string
+  title: string
+  expiresIn: number
+}): Promise<Paste> {
   return request<Paste>("/api/pastes", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content, language, expiresIn }),
+    body: JSON.stringify(paste),
   })
 }
 

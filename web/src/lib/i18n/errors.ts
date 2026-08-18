@@ -17,6 +17,7 @@ const TRANSLATED: Record<string, MessageKey> = {
   empty: "err.empty",
   too_large: "err.too_large",
   bad_expiry: "err.bad_expiry",
+  bad_title: "err.bad_title",
   rate_limited: "err.rate_limited",
   busy: "err.busy",
   no_room: "err.no_room",

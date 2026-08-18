@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useDocumentTitle } from "@/hooks/use-document-title"
+import { useLanguageLabel } from "@/hooks/use-language-label"
 import { useServerConfig } from "@/hooks/use-server-config"
 import { ApiError, fetchPaste, type Paste } from "@/lib/api"
 import { copyText } from "@/lib/clipboard"
@@ -32,15 +34,16 @@ import { describeError } from "@/lib/i18n/errors"
 import { countdown, countdownLong } from "@/lib/expiry"
 import { formatInterval } from "@/components/expiry-picker"
 import { useT } from "@/lib/i18n"
-import { PLAIN, languageLabel } from "@/lib/languages"
+import { PLAIN } from "@/lib/languages"
 import { clampRange, formatLineHash, parseLineHash, selectLine } from "@/lib/lines"
-import { describeTimestamp, formatTimeOfDay, formatTimestamp } from "@/lib/utils"
+import { cn, describeTimestamp, formatTimeOfDay, formatTimestamp } from "@/lib/utils"
 
 export function PastePage() {
   const { code = "" } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
   const t = useT()
+  const languageLabel = useLanguageLabel()
 
   // A paste that was just created arrives through router state; anything else
   // has to be fetched.
@@ -72,6 +75,15 @@ export function PastePage() {
       cancelled = true
     }
   }, [code, paste])
+
+  // The tab says what the paste is: its name when it has one, otherwise the
+  // same summary a link preview would show.
+  useDocumentTitle(
+    !paste
+      ? null
+      : paste.title ||
+          `${languageLabel(paste.language || PLAIN)} · ${t("paste.chars", { count: paste.chars.toLocaleString() })}`,
+  )
 
   // The fragment is the whole point of a line selection, so a copied link keeps
   // it: sharing "look at line 42" should not need a second instruction.
@@ -220,9 +232,19 @@ export function PastePage() {
             <Badge variant="secondary" className="font-mono">
               {paste.key}
             </Badge>
+            {/* The name, when there is one: it says more than the language
+                does, so it gets the room and the language yields on a phone. */}
+            {paste.title && (
+              <span className="min-w-0 truncate text-xs font-medium">{paste.title}</span>
+            )}
             {/* Ellipsised, not wrapped: a two-word label like "Objective-C"
                 would otherwise break across lines and grow the whole bar. */}
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
+            <span
+              className={cn(
+                "min-w-0 truncate text-xs text-muted-foreground",
+                paste.title && "hidden sm:inline",
+              )}
+            >
               {languageLabel(paste.language || PLAIN)}
             </span>
             <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">

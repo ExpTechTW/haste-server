@@ -9,6 +9,9 @@ endpoints, and the React frontend all embedded.
 
 - **Short hash-style codes that never collide** — `k7Qm2Xp9`, not `1`, `2`, `3`.
 - **Write-once.** There is no edit or delete path, and the database enforces it.
+- **A confirmation step before saving** — one dialog takes the title (15
+  characters, optional) and the lifetime, because a paste is write-once and
+  neither can be changed afterwards.
 - **Temporary pastes on request** — an hour to thirty days, with a live
   countdown and the exact UTC+8 instant. Asking for nothing means no timed
   deletion, which is not the same as being kept.
@@ -54,8 +57,9 @@ make dev-web  # UI on :5173
 
 | Action | How |
 | ------ | --- |
-| Save | `⌘/Ctrl + S`, or the Save button |
-| Set a lifetime | The clock menu in the status bar — 1h to 30d, or none |
+| Save | `⌘/Ctrl + S`, or the Save button — both open a confirmation |
+| Name it | The title field in that dialog, 15 characters, optional |
+| Set a lifetime | The clock menu in that dialog — 1h to 30d, or none |
 | See when it expires | Click the countdown — it shows the exact UTC+8 instant |
 | Change language | The 文/A button in the header |
 | Load a file | Drop it onto the editor |
@@ -67,6 +71,13 @@ make dev-web  # UI on :5173
 
 The language is detected as you type and highlighted live. The picker shows
 `Auto · Dart`; choosing one yourself pins it.
+
+A title is optional and at most 15 characters — code points, not bytes, so
+fifteen Chinese characters is fifteen characters. Given one, the link preview
+and the browser tab show it in place of the generated `Python · 410 字元`;
+without one, nothing changes. It is as immutable as the content, and control
+characters and bidi overrides are refused — in a preview landing in someone
+else's chat window those are a spoofing tool rather than a typographic one.
 
 The lifetime defaults to none, and saving with none says so once: it means no
 deletion time was set, not that the paste is kept. When space runs short the
@@ -83,7 +94,7 @@ curl --data-binary @main.go http://localhost:8080/api/pastes
 # Create with JSON, naming the language
 curl -X POST http://localhost:8080/api/pastes \
   -H 'Content-Type: application/json' \
-  -d '{"content":"print(1)","language":"python"}'
+  -d '{"content":"print(1)","language":"python","title":"prod crash log"}'
 
 # Delete it in six hours. JSON takes expiresIn in seconds; a raw body passes it
 # in the query string, as seconds (21600), hours (6h) or days (30d).
@@ -108,6 +119,7 @@ compressor achieved:
   "downloadUrl": "http://localhost:8080/download/LkKzpZ2q",
   "filename": "LkKzpZ2q.dart",
   "language": "dart",
+  "title": "prod crash log",
   "chars": 231,
   "bytes": 231,
   "stored": 162,

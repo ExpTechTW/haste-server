@@ -11,27 +11,36 @@ import {
 import { toast } from "sonner"
 
 import { CodeEditor } from "@/components/code-editor"
-import { ExpiryPicker } from "@/components/expiry-picker"
 import { AUTO, LanguagePicker } from "@/components/language-picker"
+import { SaveDialog } from "@/components/save-dialog"
 import { HeaderBar, Kbd, Shell, StatusBar } from "@/components/shell"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useDocumentTitle } from "@/hooks/use-document-title"
+import { useLanguageLabel } from "@/hooks/use-language-label"
 import { useServerConfig } from "@/hooks/use-server-config"
 import { createPaste } from "@/lib/api"
 import { NO_EXPIRY, expiryOptions } from "@/lib/expiry"
 import { useT, type Translate } from "@/lib/i18n"
 import { describeError } from "@/lib/i18n/errors"
 import { PLAIN, detectLanguage } from "@/lib/languages"
+import { ORGANISATION } from "@/components/shell"
 import { cn, countCodePoints, modKey } from "@/lib/utils"
 
 export function EditorPage() {
   const navigate = useNavigate()
   const config = useServerConfig()
   const t = useT()
+  const languageLabel = useLanguageLabel()
+
+  // The landing page is the product; nothing more specific to say.
+  useDocumentTitle(ORGANISATION)
 
   const [content, setContent] = React.useState("")
   const [choice, setChoice] = React.useState(AUTO)
   const [expiresIn, setExpiresIn] = React.useState(NO_EXPIRY)
+  const [title, setTitle] = React.useState("")
+  const [confirming, setConfirming] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [dragging, setDragging] = React.useState(false)
 
@@ -65,12 +74,25 @@ export function EditorPage() {
   const overLimit = chars > config.maxChars
   const empty = content.trim().length === 0
 
+  // Saving is two steps now. This one only asks: a paste cannot be edited or
+  // deleted once it exists, so the title and the lifetime have to be settled
+  // before it does, not discovered afterwards.
+  const askToSave = React.useCallback(() => {
+    if (saving || empty || overLimit) return
+    setConfirming(true)
+  }, [empty, overLimit, saving])
+
   const save = React.useCallback(async () => {
     if (saving || empty || overLimit) return
 
     setSaving(true)
     try {
-      const paste = await createPaste(content, language === PLAIN ? "" : language, expiresIn)
+      const paste = await createPaste({
+        content,
+        language: language === PLAIN ? "" : language,
+        title: title.trim(),
+        expiresIn,
+      })
       // Saying nothing here would let "no expiry" be read as "kept forever",
       // which is the one thing the store cannot promise. Said once, at the
       // moment the choice takes effect, rather than as standing small print.
@@ -81,12 +103,14 @@ export function EditorPage() {
       // second round trip.
       navigate(`/${paste.key}`, { state: { paste } })
     } catch (error) {
+      // The dialog stays open: whatever was rejected is almost always
+      // something in it, and closing would hide the field to fix.
       toast.error(t("editor.saveFailed"), {
         description: describeError(t, error, "editor.saveFailedBody"),
       })
       setSaving(false)
     }
-  }, [content, empty, expiresIn, language, navigate, overLimit, saving, t])
+  }, [content, empty, expiresIn, language, navigate, overLimit, saving, t, title])
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -94,12 +118,12 @@ export function EditorPage() {
         (event.metaKey || event.ctrlKey) && (event.key === "s" || event.key === "Enter")
       if (isSaveChord) {
         event.preventDefault()
-        void save()
+        askToSave()
       }
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [save])
+  }, [askToSave])
 
   const onTextareaKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Escape") {
@@ -181,20 +205,16 @@ export function EditorPage() {
           {chars.toLocaleString()} / {config.maxChars.toLocaleString()}
         </span>
 
+        {/* Editing-time state only. What a paste is called and how long it
+            lives are publishing decisions, and they live in the save dialog. */}
         <div className="ml-auto flex min-w-0 items-center gap-2">
-          <ExpiryPicker
-            value={expiresIn}
-            options={expiries}
-            cleanupEverySecs={config.cleanupEverySecs}
-            onChange={setExpiresIn}
-          />
           <LanguagePicker value={choice} detected={detected} onChange={setChoice} />
 
           <Tooltip>
             <TooltipTrigger asChild>
               {/* span keeps the tooltip reachable while the button is disabled */}
               <span>
-                <Button size="sm" className="shrink-0" onClick={() => void save()} disabled={saving || empty || overLimit}>
+                <Button size="sm" className="shrink-0" onClick={askToSave} disabled={saving || empty || overLimit}>
                   {saving ? (
                     <LoaderCircleIcon className="animate-spin" />
                   ) : (
@@ -216,6 +236,28 @@ export function EditorPage() {
           </Tooltip>
         </div>
       </StatusBar>
+
+      <SaveDialog
+        open={confirming}
+        onOpenChange={(next) => {
+          if (!saving) setConfirming(next)
+        }}
+        title={title}
+        onTitleChange={setTitle}
+        maxTitleChars={config.maxTitleChars}
+        expiresIn={expiresIn}
+        onExpiryChange={setExpiresIn}
+        expiryOptions={expiries}
+        cleanupEverySecs={config.cleanupEverySecs}
+        languageLabel={
+          choice === AUTO && detected !== PLAIN
+            ? `${t("lang.auto")}(${languageLabel(detected)})`
+            : languageLabel(language)
+        }
+        chars={chars}
+        saving={saving}
+        onConfirm={() => void save()}
+      />
     </Shell>
   )
 }
@@ -241,7 +283,7 @@ function Welcome({ t, maxChars }: { t: Translate; maxChars: number }) {
 
       <div className="relative flex flex-col items-center gap-6 text-center">
         <div className="space-y-2.5">
-          <h1 className="font-mono text-4xl font-semibold tracking-tight sm:text-5xl">haste</h1>
+          <h1 className="font-mono text-4xl font-semibold tracking-tight sm:text-5xl">Haste</h1>
           <p className="text-sm text-muted-foreground sm:text-base">{t("editor.tagline")}</p>
         </div>
 

@@ -27,6 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/YuYu1015/haste-server/internal/compress"
@@ -50,6 +51,13 @@ const (
 	// the steady state of a full database only one or two rows have to go, so
 	// this is a ceiling rather than a typical cost.
 	evictBatch = 64
+
+	// MaxTitleChars bounds an optional title.
+	//
+	// Short on purpose: the title is what a link preview and a browser tab show,
+	// and both truncate long text anyway. Fifteen is enough for "prod crash log"
+	// and too few to smuggle a sentence into someone else's chat window.
+	MaxTitleChars = 15
 
 	// NoExpiry is the ttl for a paste that asks for no lifetime. It is not a
 	// promise of permanence: the storage cap and the operator's own TTLs still
@@ -112,6 +120,8 @@ var (
 	ErrTooLarge = errors.New("store: paste exceeds character limit")
 	// ErrNoRoom means a single paste could not fit inside the whole byte cap.
 	ErrNoRoom = errors.New("store: paste does not fit within the storage cap")
+	// ErrBadTitle means the title was too long or held control characters.
+	ErrBadTitle = errors.New("store: unusable title")
 	// ErrBadTTL means the requested lifetime was not one of TTLOptions.
 	ErrBadTTL = errors.New("store: unsupported lifetime")
 	// ErrBusy means too many writes are already queued and this one was shed
@@ -125,6 +135,7 @@ type Paste struct {
 	Seq        uint64
 	Code       string
 	Language   string
+	Title      string
 	Chars      int
 	RawBytes   int
 	StoredSize int
@@ -272,6 +283,7 @@ func Open(ctx context.Context, opts Options) (*Store, error) {
 // these applied by hand before anything can reference them.
 var addedColumns = []struct{ name, ddl string }{
 	{"expires_at", "ALTER TABLE pastes ADD COLUMN expires_at INTEGER"},
+	{"title", "ALTER TABLE pastes ADD COLUMN title TEXT NOT NULL DEFAULT ''"},
 }
 
 // addMissingColumns brings an existing database up to the current shape.
@@ -352,14 +364,17 @@ func (s *Store) Close() error {
 //
 // A ttl of zero records no lifetime; anything else must be one of TTLOptions
 // and is written as an absolute instant, so a paste's deadline does not move if
-// the server restarts.
-func (s *Store) Create(ctx context.Context, content, language string, ttl time.Duration) (*Paste, error) {
+// the server restarts. An empty title means none was given.
+func (s *Store) Create(ctx context.Context, content, language, title string, ttl time.Duration) (*Paste, error) {
 	chars := utf8.RuneCountInString(content)
+	title, titleErr := CleanTitle(title)
 	switch {
 	case chars == 0:
 		return nil, ErrEmpty
 	case chars > s.opts.MaxChars:
 		return nil, fmt.Errorf("%w: %d > %d", ErrTooLarge, chars, s.opts.MaxChars)
+	case titleErr != nil:
+		return nil, titleErr
 	case !AllowedTTL(ttl):
 		return nil, fmt.Errorf("%w: must be 0 or one of %s", ErrBadTTL, ttlList)
 	}
@@ -382,6 +397,7 @@ func (s *Store) Create(ctx context.Context, content, language string, ttl time.D
 	now := time.Now().UTC().Truncate(time.Second)
 	p := &Paste{
 		Language:   language,
+		Title:      title,
 		Chars:      chars,
 		RawBytes:   len(raw),
 		StoredSize: len(body),
@@ -437,9 +453,9 @@ func (s *Store) Create(ctx context.Context, content, language string, ttl time.D
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO pastes (seq, code, body, codec, bytes, chars, raw_bytes, language, created_at, accessed_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		p.Seq, p.Code, body, codec, size, p.Chars, p.RawBytes, p.Language,
+		`INSERT INTO pastes (seq, code, body, codec, bytes, chars, raw_bytes, language, title, created_at, accessed_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Seq, p.Code, body, codec, size, p.Chars, p.RawBytes, p.Language, p.Title,
 		p.CreatedAt.Unix(), p.CreatedAt.Unix(), expires,
 	); err != nil {
 		return nil, fmt.Errorf("store: insert paste: %w", err)
@@ -474,14 +490,14 @@ func (s *Store) Get(ctx context.Context, code string) (*Paste, string, error) {
 		expires sql.NullInt64
 	)
 	err := s.r.QueryRowContext(ctx,
-		`SELECT seq, code, body, codec, chars, raw_bytes, language, created_at, expires_at
+		`SELECT seq, code, body, codec, chars, raw_bytes, language, title, created_at, expires_at
 		   FROM pastes
 		  WHERE code = ?
 		    AND (expires_at IS NULL OR expires_at > ?)
 		    AND (? = 0 OR accessed_at > ?)
 		    AND (? = 0 OR created_at > ?)`,
 		code, now.Unix(), accessCutoff, accessCutoff, createCutoff, createCutoff,
-	).Scan(&p.Seq, &p.Code, &body, &codec, &p.Chars, &p.RawBytes, &p.Language, &created, &expires)
+	).Scan(&p.Seq, &p.Code, &body, &codec, &p.Chars, &p.RawBytes, &p.Language, &p.Title, &created, &expires)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, "", ErrNotFound
@@ -524,14 +540,14 @@ func (s *Store) Meta(ctx context.Context, code string) (*Paste, error) {
 		expires sql.NullInt64
 	)
 	err := s.r.QueryRowContext(ctx,
-		`SELECT seq, code, bytes, chars, raw_bytes, language, created_at, expires_at
+		`SELECT seq, code, bytes, chars, raw_bytes, language, title, created_at, expires_at
 		   FROM pastes
 		  WHERE code = ?
 		    AND (expires_at IS NULL OR expires_at > ?)
 		    AND (? = 0 OR accessed_at > ?)
 		    AND (? = 0 OR created_at > ?)`,
 		code, now.Unix(), accessCutoff, accessCutoff, createCutoff, createCutoff,
-	).Scan(&p.Seq, &p.Code, &p.StoredSize, &p.Chars, &p.RawBytes, &p.Language, &created, &expires)
+	).Scan(&p.Seq, &p.Code, &p.StoredSize, &p.Chars, &p.RawBytes, &p.Language, &p.Title, &created, &expires)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, ErrNotFound
@@ -542,6 +558,38 @@ func (s *Store) Meta(ctx context.Context, code string) (*Paste, error) {
 	p.CreatedAt = time.Unix(created, 0).UTC()
 	p.ExpiresAt = expiryTime(expires)
 	return &p, nil
+}
+
+// CleanTitle normalises a title and rejects one that cannot be used.
+//
+// The title is rendered into a page title, a link preview and a browser tab, so
+// what it must not contain is anything that reads as structure rather than as
+// text. Newlines split a meta tag's content. Control characters do nothing
+// visible while still occupying the fifteen characters someone else can read.
+// And the bidi controls reorder whatever follows them, which in a preview
+// landing in someone else's chat window is a spoofing tool rather than a
+// typographic one — U+202E is a format character, not a control one, so
+// IsControl alone would let it through.
+//
+// Other format characters stay allowed: zero-width joiner is what holds a
+// family emoji together, and a title is a place people put emoji.
+//
+// Surrounding space is trimmed rather than refused — it is a typo, not an
+// attack — and a title that is only space is simply no title.
+func CleanTitle(title string) (string, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return "", nil
+	}
+	if n := utf8.RuneCountInString(title); n > MaxTitleChars {
+		return "", fmt.Errorf("%w: %d characters, limit is %d", ErrBadTitle, n, MaxTitleChars)
+	}
+	for _, r := range title {
+		if unicode.IsControl(r) || unicode.Is(unicode.Bidi_Control, r) {
+			return "", fmt.Errorf("%w: control characters are not allowed", ErrBadTitle)
+		}
+	}
+	return title, nil
 }
 
 // expiryTime converts a nullable column into the zero time for "no lifetime".

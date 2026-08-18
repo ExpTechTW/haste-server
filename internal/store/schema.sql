@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS pastes (
     chars       INTEGER NOT NULL,         -- runes, as counted against the limit
     raw_bytes   INTEGER NOT NULL,         -- decoded UTF-8 length
     language    TEXT    NOT NULL DEFAULT '',
+    title       TEXT    NOT NULL DEFAULT '',   -- optional, <= MaxTitleChars runes
     created_at  INTEGER NOT NULL,         -- unix seconds
     accessed_at INTEGER NOT NULL,         -- unix seconds; drives LRU eviction
     expires_at  INTEGER                   -- unix seconds; NULL = no expiry set

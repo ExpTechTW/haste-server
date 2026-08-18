@@ -11,8 +11,9 @@ import {
   CommandList,
 } from "@/components/ui/command"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useLanguageLabel } from "@/hooks/use-language-label"
 import { useT } from "@/lib/i18n"
-import { LANGUAGES, PLAIN, languageLabel } from "@/lib/languages"
+import { LANGUAGES, PLAIN } from "@/lib/languages"
 import { cn } from "@/lib/utils"
 
 /** Sentinel for "let the detector decide". */
@@ -34,6 +35,7 @@ export function LanguagePicker({
 }) {
   const [open, setOpen] = React.useState(false)
   const t = useT()
+  const languageLabel = useLanguageLabel()
 
   // "Auto(Dart)" rather than "Auto · Dart": short enough to say both things at
   // any width, so the phone no longer has to drop half of it.
@@ -103,7 +105,7 @@ export function LanguagePicker({
                   keywords={[lang.label, lang.aliases ?? ""]}
                   onSelect={select}
                 >
-                  <span className="flex-1 truncate">{lang.label}</span>
+                  <span className="flex-1 truncate">{languageLabel(lang.id)}</span>
                   <CheckIcon className={cn("size-3.5", value !== lang.id && "invisible")} />
                 </CommandItem>
               ))}

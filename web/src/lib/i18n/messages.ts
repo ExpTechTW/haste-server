@@ -6,7 +6,7 @@
  * compile error. A nested shape would let a whole branch go absent unnoticed.
  *
  * `{name}` placeholders are substituted by `t`. Anything that is a name rather
- * than a word — ExpTech Studio, haste, the language labels, HTTP methods — is
+ * than a word — ExpTech Studio, Haste, the language labels, HTTP methods — is
  * deliberately absent: those read the same in every language.
  */
 export const en = {
@@ -38,6 +38,20 @@ export const en = {
   "editor.noExpiry": "Saved without an expiry",
   "editor.noExpiryBody":
     "No deletion time was set. That is not a promise to keep it: pastes are removed when the server needs the space.",
+
+  "save.title": "Save this paste",
+  "save.description": "Confirm what gets shared. None of it can be changed afterwards.",
+  "save.titleLabel": "Title",
+  "save.titleOptional": "optional",
+  "save.titlePlaceholder": "prod crash log",
+  "save.titleHint": "Shown in the link preview instead of the language and size.",
+  "save.titleTooLong": "At most {max} characters.",
+  "save.language": "Language",
+  "save.expiry": "Deleted after",
+  "save.size": "Size",
+  "save.cancel": "Cancel",
+  "save.confirm": "Save",
+  "save.close": "Close",
 
   "lang.aria": "Syntax highlighting",
   "lang.auto": "Auto",
@@ -106,6 +120,7 @@ export const en = {
   "err.empty": "The paste is empty.",
   "err.too_large": "The paste is over the character limit.",
   "err.bad_expiry": "That is not one of the lifetimes this server accepts.",
+  "err.bad_title": "That title cannot be used.",
   "err.rate_limited": "Too many pastes at once. Try again in a moment.",
   "err.busy": "The server is saving too many pastes right now. Try again shortly.",
   "err.no_room": "The paste is larger than the server's entire storage cap.",
@@ -147,6 +162,7 @@ export const en = {
 
   "docs.p.code": "The share code, as returned by a create.",
   "docs.p.content": "The paste itself.",
+  "docs.p.title": "An optional name, at most {max} characters. Replaces the generated summary in the link preview.",
   "docs.p.language": "Highlighting hint. Omitted or unknown means it is detected on read.",
   "docs.p.expiresIn":
     "Seconds until deletion. 0 or absent means no deletion time. Only the values published by /api/config are accepted.",
@@ -199,6 +215,20 @@ const zhTW: Messages = {
   "editor.saveFailedBody": "儲存時發生了未預期的錯誤。",
   "editor.noExpiry": "已儲存，未設定期限",
   "editor.noExpiryBody": "沒有設定刪除時間。這不是承諾保留：空間不足時貼文仍會被清除。",
+
+  "save.title": "儲存這則貼文",
+  "save.description": "確認要分享的內容。儲存之後都不能再改。",
+  "save.titleLabel": "標題",
+  "save.titleOptional": "選填",
+  "save.titlePlaceholder": "正式站崩潰紀錄",
+  "save.titleHint": "連結預覽會顯示它，取代語言與字數。",
+  "save.titleTooLong": "最多 {max} 個字。",
+  "save.language": "語言",
+  "save.expiry": "多久後刪除",
+  "save.size": "大小",
+  "save.cancel": "取消",
+  "save.confirm": "儲存",
+  "save.close": "關閉",
 
   "lang.aria": "語法上色",
   "lang.auto": "自動",
@@ -263,6 +293,7 @@ const zhTW: Messages = {
   "err.empty": "內容是空的。",
   "err.too_large": "超過字元上限。",
   "err.bad_expiry": "這不是伺服器接受的期限之一。",
+  "err.bad_title": "這個標題不能使用。",
   "err.rate_limited": "短時間內送出太多次，請稍候再試。",
   "err.busy": "伺服器正在處理太多寫入，請稍候再試。",
   "err.no_room": "這則貼文比伺服器的整個空間上限還大。",
@@ -304,6 +335,7 @@ const zhTW: Messages = {
 
   "docs.p.code": "分享碼，由建立時回傳。",
   "docs.p.content": "貼文內容本身。",
+  "docs.p.title": "選填的名稱，最多 {max} 個字。連結預覽會用它取代自動產生的摘要。",
   "docs.p.language": "上色提示。省略或無法辨識時，讀取時再自動偵測。",
   "docs.p.expiresIn": "幾秒後刪除。0 或省略代表不設刪除時間。只接受 /api/config 發布的那幾個值。",
   "docs.p.expiresInQuery": "同上，給 raw body 用。可寫秒數（21600）、小時（6h）或天（30d）。",
@@ -352,6 +384,20 @@ const jaJP: Messages = {
   "editor.noExpiry": "期限なしで保存しました",
   "editor.noExpiryBody":
     "削除時刻は設定されていません。保存を約束するものではなく、容量が足りなくなればペーストは削除されます。",
+
+  "save.title": "このペーストを保存",
+  "save.description": "共有する内容を確認します。保存後は変更できません。",
+  "save.titleLabel": "タイトル",
+  "save.titleOptional": "任意",
+  "save.titlePlaceholder": "本番のクラッシュログ",
+  "save.titleHint": "リンクプレビューで、言語と文字数の代わりに表示されます。",
+  "save.titleTooLong": "{max} 文字以内にしてください。",
+  "save.language": "言語",
+  "save.expiry": "削除まで",
+  "save.size": "サイズ",
+  "save.cancel": "キャンセル",
+  "save.confirm": "保存",
+  "save.close": "閉じる",
 
   "lang.aria": "シンタックスハイライト",
   "lang.auto": "自動",
@@ -420,6 +466,7 @@ const jaJP: Messages = {
   "err.empty": "内容が空です。",
   "err.too_large": "文字数の上限を超えています。",
   "err.bad_expiry": "このサーバーが受け付ける期限ではありません。",
+  "err.bad_title": "このタイトルは使用できません。",
   "err.rate_limited": "短時間に送りすぎです。少し待ってからお試しください。",
   "err.busy": "サーバーの書き込みが混み合っています。少し待ってからお試しください。",
   "err.no_room": "ペーストがサーバーの保存容量そのものより大きいです。",
@@ -461,6 +508,7 @@ const jaJP: Messages = {
 
   "docs.p.code": "共有コード。作成時に返されます。",
   "docs.p.content": "ペーストの内容そのもの。",
+  "docs.p.title": "任意の名前、最大 {max} 文字。リンクプレビューで自動生成の要約の代わりに使われます。",
   "docs.p.language": "ハイライトのヒント。省略または不明な場合は読み込み時に自動判定します。",
   "docs.p.expiresIn":
     "何秒後に削除するか。0 または省略で削除時刻なし。/api/config が公開する値のみ受け付けます。",

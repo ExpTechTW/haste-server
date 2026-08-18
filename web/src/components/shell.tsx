@@ -11,8 +11,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useT } from "@/lib/i18n"
 import { cn } from "@/lib/utils"
 
-const ORGANISATION = "ExpTech Studio"
-const PRODUCT = "haste"
+export const ORGANISATION = "ExpTech Studio"
+const PRODUCT = "Haste"
 const REPOSITORY = "https://github.com/ExpTechTW"
 
 /** Full-viewport column: fixed header, flexible body, fixed status bar. */

@@ -70,12 +70,13 @@ func newTestServer(t *testing.T, tweak ...func(*config.Config)) *httptest.Server
 	t.Cleanup(func() { st.Close() })
 
 	// Mirrors the real shell closely enough to exercise the parts the server
-	// touches: the markers it rewrites between, and a default title to fall
-	// back to.
+	// touches: the markers it rewrites between, and the default head to fall
+	// back to when there is no paste.
 	ui := fstest.MapFS{
 		"index.html": &fstest.MapFile{Data: []byte(
 			"<!doctype html><html><head><!--head:start-->\n" +
-				"<title>haste</title>\n" +
+				"<title>ExpTech Studio · Haste</title>\n" +
+				`<meta name="description" content="貼上分享內容，取得一個分享連結。" />` + "\n" +
 				"<!--head:end--></head><body><div id=root></div></body></html>")},
 		"assets/app.123.js": &fstest.MapFile{Data: []byte("console.log(1)")},
 	}
@@ -625,22 +626,18 @@ func TestPastePageCarriesItsOwnMetadata(t *testing.T) {
 	content := strings.Repeat("final item = compute();\n", 30)
 	_, created := postJSON(t, srv, createBody(t, content, "dart"))
 
-	fetch := func(path string) string {
-		t.Helper()
-		resp, err := srv.Client().Get(srv.URL + path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		body, _ := io.ReadAll(resp.Body)
-		return string(body)
-	}
+	page := fetchPage(t, srv, "/"+created.Key)
+	summary := "Dart · " + strconv.Itoa(created.Chars) + " 字元"
 
-	page := fetch("/" + created.Key)
-	chars := strconv.Itoa(created.Chars)
-	for _, want := range []string{"Dart", chars, created.Key} {
+	// Untitled: the summary is generated, and the description says what the
+	// reader is being offered rather than repeating the share code at them.
+	for _, want := range []string{
+		"<title>" + summary + " · Haste</title>",
+		`<meta property="og:title" content="` + summary + `" />`,
+		`content="檢視這則 ` + summary + `"`,
+	} {
 		if !strings.Contains(page, want) {
-			t.Errorf("paste page metadata is missing %q", want)
+			t.Errorf("paste page head is missing %q", want)
 		}
 	}
 
@@ -651,14 +648,125 @@ func TestPastePageCarriesItsOwnMetadata(t *testing.T) {
 	}
 
 	// The landing page keeps the generic description.
-	if home := fetch("/"); strings.Contains(home, "Dart") || strings.Contains(home, chars+" 字元") {
+	home := fetchPage(t, srv, "/")
+	if strings.Contains(home, "Dart") {
 		t.Error("the landing page picked up a paste's metadata")
+	}
+	if !strings.Contains(home, "<title>ExpTech Studio · Haste</title>") {
+		t.Error("the landing page lost its own title")
 	}
 
 	// An unknown code falls back rather than inventing anything.
-	if missing := fetch("/zzzzzzzz"); !strings.Contains(missing, "<title>haste</title>") {
+	if missing := fetchPage(t, srv, "/zzzzzzzz"); !strings.Contains(missing, "ExpTech Studio · Haste") {
 		t.Error("an unknown code should fall back to the default head")
 	}
+}
+
+// A title is the whole point of naming a paste: it has to be what a link
+// preview shows, in place of the summary the server would otherwise generate.
+func TestTitledPasteUsesItsTitleInTheHead(t *testing.T) {
+	srv := newTestServer(t)
+
+	body, err := json.Marshal(map[string]any{
+		"content": strings.Repeat("x", 100), "language": "python", "title": "prod crash log",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, created := postJSON(t, srv, string(body))
+	if created.Title != "prod crash log" {
+		t.Fatalf("title = %q in the response", created.Title)
+	}
+
+	page := fetchPage(t, srv, "/"+created.Key)
+	for _, want := range []string{
+		"<title>prod crash log · Haste</title>",
+		`<meta property="og:title" content="prod crash log" />`,
+		`<meta name="twitter:title" content="prod crash log" />`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("head is missing %q", want)
+		}
+	}
+
+	// The description keeps saying what the thing is, because the title has
+	// replaced that information in the headline rather than added to it.
+	if !strings.Contains(page, "檢視這則 Python · 100 字元") {
+		t.Error("the description lost the generated summary")
+	}
+}
+
+// The title is attacker-supplied text rendered into an attribute.
+func TestTitleIsEscapedInTheHead(t *testing.T) {
+	srv := newTestServer(t)
+
+	body, err := json.Marshal(map[string]any{
+		"content": "x", "title": `"><script>x`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, created := postJSON(t, srv, string(body))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+
+	page := fetchPage(t, srv, "/"+created.Key)
+	if strings.Contains(page, "<script>x") {
+		t.Error("the title escaped its attribute")
+	}
+	if !strings.Contains(page, "&#34;&gt;&lt;script&gt;x") {
+		t.Errorf("the title was not escaped as expected")
+	}
+}
+
+func TestCreateRejectsBadTitles(t *testing.T) {
+	srv := newTestServer(t)
+
+	for _, tc := range []struct {
+		name  string
+		title string
+	}{
+		{"too long", strings.Repeat("a", 16)},
+		{"too long in CJK", strings.Repeat("字", 16)},
+		{"a newline", "two\nlines"},
+		{"a bidi override", "\u202Eoverride"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"content": "x", "title": tc.title})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, _ := postJSON(t, srv, string(body))
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", resp.StatusCode)
+			}
+		})
+	}
+
+	// Exactly at the limit, in the script that costs the most bytes per
+	// character, has to be accepted.
+	body, err := json.Marshal(map[string]any{"content": "x", "title": strings.Repeat("字", 15)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := postJSON(t, srv, string(body)); resp.StatusCode != http.StatusCreated {
+		t.Errorf("status = %d for a 15-character title, want 201", resp.StatusCode)
+	}
+}
+
+func fetchPage(t *testing.T, srv *httptest.Server, path string) string {
+	t.Helper()
+	resp, err := srv.Client().Get(srv.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
 }
 
 // Two pastes share the URL shape but not the document, so a validator computed
@@ -1186,5 +1294,41 @@ func TestStatsIsCached(t *testing.T) {
 	postJSON(t, srv, createBody(t, "a paste that must not show up yet", ""))
 	if n := read(t); n != 0 {
 		t.Errorf("count = %d immediately after a write; the cached scan was bypassed", n)
+	}
+}
+
+// A preview has no ticking clock, so a floored span reads as wrong rather than
+// as counting down: a six-hour paste announcing "5 小時後刪除" the moment it is
+// created is the case this exists to prevent.
+func TestRemainingRoundsToNearest(t *testing.T) {
+	for _, tc := range []struct {
+		left time.Duration
+		want string
+	}{
+		{0, ""},
+		{-time.Minute, ""},
+		{30 * time.Second, "1 分鐘"},
+		{90 * time.Second, "2 分鐘"},
+		{45 * time.Minute, "45 分鐘"},
+		{59*time.Minute + 40*time.Second, "1 小時"},
+		{6 * time.Hour, "6 小時"},
+		{6*time.Hour - time.Second, "6 小時"},
+		{23*time.Hour + 40*time.Minute, "1 天"},
+		{7 * 24 * time.Hour, "7 天"},
+		{30*24*time.Hour - time.Second, "30 天"},
+	} {
+		now := time.Now()
+		p := &store.Paste{}
+		if tc.left != 0 {
+			p.ExpiresAt = now.Add(tc.left)
+		}
+		if got := remainingAt(p, now); got != tc.want {
+			t.Errorf("remaining(%s) = %q, want %q", tc.left, got, tc.want)
+		}
+	}
+
+	// No lifetime is not a short one.
+	if got := remaining(&store.Paste{}); got != "" {
+		t.Errorf("remaining with no expiry = %q, want empty", got)
 	}
 }

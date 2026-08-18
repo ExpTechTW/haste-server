@@ -66,13 +66,16 @@ const ENDPOINTS: Endpoint[] = [
     params: [
       { name: "expiresIn", type: "string", desc: "docs.p.expiresInQuery" },
       { name: "language", type: "string", desc: "docs.p.languageQuery" },
+      { name: "title", type: "string", desc: "docs.p.title" },
     ],
     body: [
       { name: "content", type: "string", required: true, desc: "docs.p.content" },
+      { name: "title", type: "string", desc: "docs.p.title" },
       { name: "language", type: "string", desc: "docs.p.language" },
       { name: "expiresIn", type: "integer", desc: "docs.p.expiresIn" },
     ],
-    example: '{\n  "content": "print(1)",\n  "language": "python",\n  "expiresIn": 21600\n}',
+    example:
+      '{\n  "content": "print(1)",\n  "title": "prod crash log",\n  "language": "python",\n  "expiresIn": 21600\n}',
     responses: [
       [201, "docs.r.201"],
       [400, "docs.r.400"],
@@ -305,6 +308,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Fields({ fields }: { fields: Field[] }) {
   const t = useT()
+  // Limits the server publishes, so a description can quote the real number
+  // rather than a copy of it written here.
+  const config = useServerConfig()
+  const limits = { max: config.maxTitleChars }
   return (
     <ul className="space-y-2">
       {fields.map((f) => (
@@ -319,7 +326,7 @@ function Fields({ fields }: { fields: Field[] }) {
           >
             {t(f.required ? "docs.required" : "docs.optional")}
           </span>
-          <p className="mt-0.5 leading-relaxed text-muted-foreground">{t(f.desc)}</p>
+          <p className="mt-0.5 leading-relaxed text-muted-foreground">{t(f.desc, limits)}</p>
         </li>
       ))}
     </ul>

@@ -38,7 +38,7 @@ func TestWriteConcurrency(t *testing.T) {
 
 		start = time.Now()
 		for i := 0; i < n; i++ {
-			if _, err := st.Create(context.Background(), content, "", NoExpiry); err != nil {
+			if _, err := st.Create(context.Background(), content, "", "", NoExpiry); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -91,7 +91,7 @@ func measure(t *testing.T, label string, tweak func(*Options), clients int) {
 			defer wg.Done()
 			for i := 0; i < perClient; i++ {
 				began := time.Now()
-				_, err := st.Create(ctx, content, "", NoExpiry)
+				_, err := st.Create(ctx, content, "", "", NoExpiry)
 				took := time.Since(began)
 
 				mu.Lock()
@@ -144,7 +144,7 @@ func TestWriteQueueShedsWhenFull(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := st.Create(ctx, content, "", NoExpiry)
+			_, err := st.Create(ctx, content, "", "", NoExpiry)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

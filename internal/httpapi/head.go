@@ -58,25 +58,34 @@ func (s shell) document(head []byte) []byte {
 	return append(out, s.after...)
 }
 
+// Product is the name as it is written: capitalised, because it is a name.
+const Product = "Haste"
+
 // pasteHead describes a paste to whatever is unfurling the link.
 //
-// Only metadata goes in: the language and the size say what is behind the link,
-// which is what a reader wants to know before clicking. The content itself
-// never appears — an unfurl is fetched and cached by a third party, and pastes
-// routinely hold logs and configuration that should not end up there.
+// Only metadata goes in: what kind of thing it is and how big, which is what a
+// reader wants to know before clicking. The content itself never appears — an
+// unfurl is fetched and cached by a third party, and pastes routinely hold logs
+// and configuration that should not end up there.
+//
+// A title, when one was given, replaces the generated summary rather than
+// joining it: someone who bothered to name the paste has said what it is better
+// than "Python · 410 字元" can.
 func pasteHead(p *store.Paste) string {
-	language := languageLabel(p.Language)
-	summary := fmt.Sprintf("%s · %s 字元", language, thousands(p.Chars))
-	description := fmt.Sprintf("在 haste 檢視這則貼文（分享碼 %s）", p.Code)
+	summary := fmt.Sprintf("%s · %s 字元", languageLabel(p.Language), thousands(p.Chars))
+	description := "檢視這則 " + summary
+	if p.Title != "" {
+		summary = p.Title
+	}
 	// A temporary paste says so in the preview, where it is most useful: the
 	// person deciding whether to open the link later is exactly the person who
 	// needs to know it will not be there.
 	if left := remaining(p); left != "" {
-		summary += " · " + left + "後刪除"
+		description += "，" + left + "後刪除"
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n    <title>%s · haste</title>\n", html.EscapeString(summary))
+	fmt.Fprintf(&b, "\n    <title>%s · %s</title>\n", html.EscapeString(summary), Product)
 	for _, tag := range [][2]string{
 		{`<meta name="description" content=%q />`, description},
 		{`<meta property="og:title" content=%q />`, summary},
@@ -92,25 +101,39 @@ func pasteHead(p *store.Paste) string {
 	return b.String()
 }
 
-// remaining renders how long a paste has left, rounded down to the unit a
-// reader actually cares about. Empty when no lifetime was set, and when the
-// paste is already gone — a preview is rendered from cached metadata and might
-// outlive the paste, and "0 分鐘後刪除" is worse than saying nothing.
+// remaining renders how long a paste has left, in the largest unit that still
+// says something.
+//
+// Rounded to nearest with the unit chosen afterwards, the same way the
+// countdown in the client is: flooring makes a six-hour paste announce itself
+// as "5 小時後刪除" the moment it is created, and a preview has no ticking clock
+// to make that read as counting down.
+//
+// Empty when no lifetime was set, and when the paste is already gone — a
+// preview is rendered from metadata a third party may have cached, and it can
+// outlive the paste it describes.
 func remaining(p *store.Paste) string {
+	return remainingAt(p, time.Now())
+}
+
+// remainingAt is remaining with the clock passed in, so a test can sit exactly
+// on a rounding boundary instead of a fraction of a millisecond below it.
+func remainingAt(p *store.Paste, now time.Time) string {
 	if p.ExpiresAt.IsZero() {
 		return ""
 	}
-	left := time.Until(p.ExpiresAt)
-	switch {
-	case left <= 0:
+	left := p.ExpiresAt.Sub(now)
+	if left <= 0 {
 		return ""
-	case left < time.Hour:
-		return fmt.Sprintf("%d 分鐘", int(left.Minutes()))
-	case left < 24*time.Hour:
-		return fmt.Sprintf("%d 小時", int(left.Hours()))
-	default:
-		return fmt.Sprintf("%d 天", int(left.Hours()/24))
 	}
+
+	if minutes := int(left.Round(time.Minute).Minutes()); minutes < 60 {
+		return fmt.Sprintf("%d 分鐘", max(minutes, 1))
+	}
+	if hours := int(left.Round(time.Hour).Hours()); hours < 24 {
+		return fmt.Sprintf("%d 小時", hours)
+	}
+	return fmt.Sprintf("%d 天", int((left+12*time.Hour).Hours()/24))
 }
 
 // languageLabel turns a stored language id into something worth reading. The

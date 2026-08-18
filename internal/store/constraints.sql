@@ -23,7 +23,7 @@ CREATE INDEX IF NOT EXISTS pastes_expires_idx
 DROP TRIGGER IF EXISTS pastes_immutable;
 
 CREATE TRIGGER pastes_immutable
-BEFORE UPDATE OF seq, code, body, codec, bytes, chars, raw_bytes, language, created_at, expires_at
+BEFORE UPDATE OF seq, code, body, codec, bytes, chars, raw_bytes, language, title, created_at, expires_at
 ON pastes
 BEGIN
     SELECT RAISE(ABORT, 'pastes are immutable');

@@ -271,7 +271,7 @@ func (s *Server) missingUIFile(w http.ResponseWriter, r *http.Request, name stri
 // uiMissingPage stands in when the binary was built without running the
 // frontend build. The API is fully functional in that state, so this explains
 // the gap rather than failing opaquely.
-const uiMissingPage = `<!doctype html><meta charset="utf-8"><title>haste</title>
+const uiMissingPage = `<!doctype html><meta charset="utf-8"><title>Haste</title>
 <style>body{font:14px/1.6 ui-monospace,Menlo,monospace;margin:6rem auto;max-width:34rem;padding:0 1.5rem}
 code{background:#8881;border-radius:4px;padding:.15rem .35rem}</style>
 <h1>Frontend not built</h1>
