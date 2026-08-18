@@ -1,13 +1,11 @@
 /**
  * Lifetimes a paste can be given, and how to describe one.
  *
- * The ladder is fixed rather than a free duration input: every rung is a span
- * someone would actually pick, and a picker with nine entries needs no
- * validation, no parsing and no way to ask for something the server refuses.
+ * The ladder is not defined here — it comes from /api/config, because the API
+ * accepts exactly these values and nothing between them. Deriving the picker
+ * from the server's own list is what keeps the two from disagreeing about what
+ * is on offer, and adding a rung is then a one-line server change.
  */
-
-const HOUR = 3600
-const DAY = 24 * HOUR
 
 /** Asking for nothing. Matches the server, where 0 means no lifetime. */
 export const NO_EXPIRY = 0
@@ -21,32 +19,39 @@ export interface ExpiryOption {
   label: string
 }
 
-export const EXPIRY_OPTIONS: ExpiryOption[] = [
-  { seconds: NO_EXPIRY, short: "∞", label: "No expiry" },
-  { seconds: HOUR, short: "1h", label: "1 hour" },
-  { seconds: 6 * HOUR, short: "6h", label: "6 hours" },
-  { seconds: 12 * HOUR, short: "12h", label: "12 hours" },
-  { seconds: DAY, short: "1d", label: "1 day" },
-  { seconds: 3 * DAY, short: "3d", label: "3 days" },
-  { seconds: 7 * DAY, short: "7d", label: "7 days" },
-  { seconds: 14 * DAY, short: "14d", label: "14 days" },
-  { seconds: 30 * DAY, short: "30d", label: "30 days" },
-]
+const NONE: ExpiryOption = { seconds: NO_EXPIRY, short: "∞", label: "No expiry" }
 
 /**
- * The rungs this server will accept.
+ * The ladder as the picker shows it: no-expiry first, then the server's list.
  *
- * The bounds come from /api/config rather than being assumed, so an instance
- * that narrows them cannot end up offering a choice its own API rejects.
+ * Labels are derived from the durations rather than sent alongside them. The
+ * server has no business holding UI copy, and "6 hours" is not information the
+ * number 21600 was missing.
  */
-export function availableExpiries(min: number, max: number): ExpiryOption[] {
-  return EXPIRY_OPTIONS.filter(
-    (o) => o.seconds === NO_EXPIRY || (o.seconds >= min && o.seconds <= max),
-  )
+export function expiryOptions(secs: readonly number[]): ExpiryOption[] {
+  return [NONE, ...secs.filter((s) => s > 0).map(describeSeconds)]
 }
 
-export function expiryOption(seconds: number): ExpiryOption {
-  return EXPIRY_OPTIONS.find((o) => o.seconds === seconds) ?? EXPIRY_OPTIONS[0]
+/** The option for a chosen value, falling back to no-expiry for anything the
+ * server does not offer — the same answer the API would give it. */
+export function expiryOption(seconds: number, secs: readonly number[]): ExpiryOption {
+  if (seconds === NO_EXPIRY) return NONE
+  return secs.includes(seconds) ? describeSeconds(seconds) : NONE
+}
+
+/** 21600 -> `{ short: "6h", label: "6 hours" }`. */
+function describeSeconds(seconds: number): ExpiryOption {
+  if (seconds % 86_400 === 0) return unit(seconds, seconds / 86_400, "day", "d")
+  if (seconds % 3_600 === 0) return unit(seconds, seconds / 3_600, "hour", "h")
+  return unit(seconds, Math.round(seconds / 60), "minute", "m")
+}
+
+function unit(seconds: number, count: number, name: string, letter: string): ExpiryOption {
+  return {
+    seconds,
+    short: `${count}${letter}`,
+    label: `${count} ${name}${count === 1 ? "" : "s"}`,
+  }
 }
 
 /**

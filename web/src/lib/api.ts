@@ -21,9 +21,11 @@ export interface Paste {
 
 export interface ServerConfig {
   maxChars: number
-  /** Bounds of a lifetime a paste may ask for, in seconds. */
-  minExpirySecs: number
-  maxExpirySecs: number
+  /**
+   * Every lifetime the API accepts, in seconds, ascending. Anything else is a
+   * 400, so the picker is built from this rather than from a range.
+   */
+  expiryOptionsSecs: number[]
   /**
    * How often the server sweeps. A paste stops being served the instant its
    * lifetime ends, but its bytes are only reclaimed on the next sweep, so this

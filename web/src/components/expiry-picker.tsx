@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { NO_EXPIRY, expiryOption, type ExpiryOption } from "@/lib/expiry"
+import { NO_EXPIRY, type ExpiryOption } from "@/lib/expiry"
 import { cn } from "@/lib/utils"
 
 /**
@@ -33,8 +33,10 @@ export function ExpiryPicker({
   cleanupEverySecs: number
   onChange: (seconds: number) => void
 }) {
-  const current = expiryOption(value)
+  // Read off the same list the menu renders, so the trigger can never name a
+  // rung the menu does not have.
   const permanent = value === NO_EXPIRY
+  const current = options.find((o) => o.seconds === value) ?? options[0]
 
   return (
     <DropdownMenu>

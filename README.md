@@ -74,7 +74,7 @@ curl -X POST http://localhost:8080/api/pastes \
   -d '{"content":"print(1)","language":"python"}'
 
 # 6 小時後刪除。JSON 用 expiresIn（秒）；raw body 走 query string，
-# 秒數或 1h / 30m 這類時間字串都收。
+# 秒數（21600）、小時（6h）、天（30d）都收。
 curl --data-binary @debug.log 'http://localhost:8080/api/pastes?expiresIn=6h'
 
 # 讀回來
@@ -104,7 +104,16 @@ curl -OJ http://localhost:8080/download/LkKzpZ2q # -> LkKzpZ2q.dart
 }
 ```
 
-`expiresAt` 只有在建立時指定了期限才會出現。它是**沒有**這個欄位，不是 `null` —— 缺席代表沒設定刪除時間，而不是承諾永久保存。期限必須落在 1 小時到 30 天之間，超出範圍會回 `400 bad_expiry`。
+`expiresAt` 只有在建立時指定了期限才會出現。它是**沒有**這個欄位，不是 `null` —— 缺席代表沒設定刪除時間，而不是承諾永久保存。
+
+期限只接受固定的幾個值，**不是**一個範圍：
+
+```
+0（不限制）· 3600 · 21600 · 43200 · 86400 · 259200 · 604800 · 1209600 · 2592000
+     1h        6h      12h      1d       3d        7d        14d        30d
+```
+
+其他任何值都回 `400 bad_expiry`，連 7200（2 小時）這種完全合理的要求也一樣。因為清理是每小時跑一次，相鄰的任意值之間並沒有伺服器真的分辨得出來的差別 —— 收下一個實際上會被抹平成整點的值，比直接拒絕更糟。這份清單由 `/api/config` 的 `expiryOptionsSecs` 發布，前端的選單就是照它建出來的，兩邊不會各說各話。
 
 | Method | 路徑                | 用途                                  |
 | ------ | ------------------- | ------------------------------------- |

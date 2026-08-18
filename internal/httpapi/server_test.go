@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -794,8 +795,9 @@ func TestCreateWithALifetime(t *testing.T) {
 
 	t.Run("raw body with a duration", func(t *testing.T) {
 		// The raw path has no envelope, so curl passes the lifetime in the query
-		// string — as a duration here, which is what a person types.
-		resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn=2h", "text/plain",
+		// string — as a duration here, which is what a person types. It still
+		// has to name a rung; 12h does, 2h does not.
+		resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn=12h", "text/plain",
 			strings.NewReader("temporary"))
 		if err != nil {
 			t.Fatal(err)
@@ -810,8 +812,8 @@ func TestCreateWithALifetime(t *testing.T) {
 		if out.ExpiresAt == nil {
 			t.Fatal("expiresAt is absent from the response")
 		}
-		if d := time.Until(*out.ExpiresAt); d < 119*time.Minute || d > 2*time.Hour+time.Minute {
-			t.Errorf("expiresAt is %s away, want about two hours", d)
+		if d := time.Until(*out.ExpiresAt); d < 719*time.Minute || d > 12*time.Hour+time.Minute {
+			t.Errorf("expiresAt is %s away, want about twelve hours", d)
 		}
 	})
 
@@ -839,8 +841,13 @@ func TestCreateRejectsBadLifetimes(t *testing.T) {
 	srv := newTestServer(t)
 
 	for _, tc := range []struct{ name, body string }{
-		{"under the minimum", `{"content":"x","expiresIn":60}`},
-		{"over the maximum", `{"content":"x","expiresIn":31536000}`},
+		{"under the first rung", `{"content":"x","expiresIn":60}`},
+		{"past the last rung", `{"content":"x","expiresIn":31536000}`},
+		// The point of a fixed ladder: two hours is a perfectly sensible ask
+		// and still a 400, because the server cannot honour it any better than
+		// the hour it sits above.
+		{"between two rungs", `{"content":"x","expiresIn":7200}`},
+		{"one second off a rung", `{"content":"x","expiresIn":3601}`},
 		{"negative", `{"content":"x","expiresIn":-3600}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -851,17 +858,56 @@ func TestCreateRejectsBadLifetimes(t *testing.T) {
 		})
 	}
 
-	t.Run("unparseable in the query string", func(t *testing.T) {
-		resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn=soon", "text/plain",
-			strings.NewReader("x"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400", resp.StatusCode)
-		}
-	})
+	for _, q := range []string{"soon", "90m", "2h", "45s"} {
+		t.Run("query string "+q, func(t *testing.T) {
+			resp, err := srv.Client().Post(srv.URL+"/api/pastes?expiresIn="+q, "text/plain",
+				strings.NewReader("x"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400", resp.StatusCode)
+			}
+		})
+	}
+}
+
+// Every rung has to work through both entry points, or the picker offers
+// something the API refuses.
+func TestEveryPublishedLifetimeIsAccepted(t *testing.T) {
+	srv := newTestServer(t)
+
+	for _, d := range store.TTLOptions {
+		secs := int64(d.Seconds())
+		t.Run(d.String(), func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{"content": "x", "expiresIn": secs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, out := postJSON(t, srv, string(body))
+			if resp.StatusCode != http.StatusCreated {
+				t.Fatalf("status = %d, want 201", resp.StatusCode)
+			}
+			if out.ExpiresAt == nil {
+				t.Fatal("expiresAt is absent")
+			}
+			if off := time.Until(*out.ExpiresAt) - d; off < -time.Minute || off > time.Minute {
+				t.Errorf("expiresAt is %s off the requested %s", off, d)
+			}
+
+			raw, err := srv.Client().Post(
+				fmt.Sprintf("%s/api/pastes?expiresIn=%d", srv.URL, secs), "text/plain",
+				strings.NewReader("x"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer raw.Body.Close()
+			if raw.StatusCode != http.StatusCreated {
+				t.Errorf("raw body: status = %d, want 201", raw.StatusCode)
+			}
+		})
+	}
 }
 
 // A shared cache must not outlive the paste it is holding, or the link keeps
@@ -931,19 +977,61 @@ func TestConfigPublishesTheLifetimeBounds(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	var cfg map[string]any
+	var cfg struct {
+		MaxChars          int     `json:"maxChars"`
+		ExpiryOptionsSecs []int64 `json:"expiryOptionsSecs"`
+		CleanupEverySecs  int64   `json:"cleanupEverySecs"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
 		t.Fatal(err)
 	}
-	// The picker's ladder and the "deletion can lag by one cleanup" note are
-	// both built from these, so a client that hard-codes them would drift.
-	for key, want := range map[string]float64{
-		"minExpirySecs":    store.MinTTL.Seconds(),
-		"maxExpirySecs":    store.MaxTTL.Seconds(),
-		"cleanupEverySecs": time.Hour.Seconds(),
+
+	// The picker is built from this list rather than from a range, so it has to
+	// be exactly what Create validates against — a client cannot infer it.
+	want := make([]int64, len(store.TTLOptions))
+	for i, d := range store.TTLOptions {
+		want[i] = int64(d.Seconds())
+	}
+	if !slices.Equal(cfg.ExpiryOptionsSecs, want) {
+		t.Errorf("expiryOptionsSecs = %v, want %v", cfg.ExpiryOptionsSecs, want)
+	}
+	// And the "deletion can lag by one cleanup" note is quoted from this.
+	if cfg.CleanupEverySecs != 3600 {
+		t.Errorf("cleanupEverySecs = %d, want 3600", cfg.CleanupEverySecs)
+	}
+}
+
+// The query string is what a person types at a shell, so it has to accept the
+// spellings the picker's own labels lead them to.
+func TestParseExpiresIn(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want time.Duration
+	}{
+		{"", 0},
+		{"0", 0},
+		{"3600", time.Hour},
+		{"6h", 6 * time.Hour},
+		{"720h", 30 * 24 * time.Hour},
+		// Days: the labels say "7 days" and "30 days", and Go has no unit above
+		// the hour, so this is the spelling that would otherwise be refused.
+		{"1d", 24 * time.Hour},
+		{"7d", 7 * 24 * time.Hour},
+		{"30d", 30 * 24 * time.Hour},
 	} {
-		if got, ok := cfg[key].(float64); !ok || got != want {
-			t.Errorf("%s = %v, want %v", key, cfg[key], want)
+		got, err := parseExpiresIn(tc.in)
+		if err != nil {
+			t.Errorf("parseExpiresIn(%q): %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseExpiresIn(%q) = %s, want %s", tc.in, got, tc.want)
+		}
+	}
+
+	for _, in := range []string{"soon", "tomorrow", "d", "1day", "-", "1.5d", "99999d"} {
+		if _, err := parseExpiresIn(in); err == nil {
+			t.Errorf("parseExpiresIn(%q) was accepted", in)
 		}
 	}
 }

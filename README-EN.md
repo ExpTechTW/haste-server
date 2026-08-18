@@ -81,7 +81,7 @@ curl -X POST http://localhost:8080/api/pastes \
   -d '{"content":"print(1)","language":"python"}'
 
 # Delete it in six hours. JSON takes expiresIn in seconds; a raw body passes it
-# in the query string, as seconds or as a duration like 1h / 30m.
+# in the query string, as seconds (21600), hours (6h) or days (30d).
 curl --data-binary @debug.log 'http://localhost:8080/api/pastes?expiresIn=6h'
 
 # Read it back
@@ -114,8 +114,21 @@ compressor achieved:
 
 `expiresAt` appears only when a lifetime was asked for. It is *absent* rather
 than `null`, because its absence means no deletion time was set — not that the
-paste is permanent. A lifetime has to fall between one hour and thirty days;
-anything else is a `400 bad_expiry`.
+paste is permanent.
+
+A lifetime has to be one of a fixed set of values, not any point in a range:
+
+```
+0 (none) · 3600 · 21600 · 43200 · 86400 · 259200 · 604800 · 1209600 · 2592000
+             1h      6h      12h     1d       3d       7d       14d       30d
+```
+
+Anything else is a `400 bad_expiry`, including a perfectly reasonable 7200. The
+sweep runs hourly, so there is no difference between neighbouring arbitrary
+values that the server can actually honour, and accepting one it will round off
+in practice is worse than refusing it. The list is published as
+`expiryOptionsSecs` on `/api/config`, and the picker is built from it, so the
+two cannot disagree about what is on offer.
 
 | Method | Path                | Purpose                                     |
 | ------ | ------------------- | ------------------------------------------- |

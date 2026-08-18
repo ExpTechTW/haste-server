@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useServerConfig } from "@/hooks/use-server-config"
 import { ApiError, createPaste } from "@/lib/api"
-import { NO_EXPIRY, availableExpiries } from "@/lib/expiry"
+import { NO_EXPIRY, expiryOptions } from "@/lib/expiry"
 import { PLAIN, detectLanguage } from "@/lib/languages"
 import { cn, countCodePoints, modKey } from "@/lib/utils"
 
@@ -44,9 +44,18 @@ export function EditorPage() {
   const language = choice === AUTO ? detected : choice
 
   const expiries = React.useMemo(
-    () => availableExpiries(config.minExpirySecs, config.maxExpirySecs),
-    [config.minExpirySecs, config.maxExpirySecs],
+    () => expiryOptions(config.expiryOptionsSecs),
+    [config.expiryOptionsSecs],
   )
+
+  // The ladder arrives from the server, so a value chosen against the fallback
+  // list has to be dropped if the real one does not offer it — otherwise Save
+  // sends a lifetime the API refuses.
+  React.useEffect(() => {
+    if (expiresIn !== NO_EXPIRY && !config.expiryOptionsSecs.includes(expiresIn)) {
+      setExpiresIn(NO_EXPIRY)
+    }
+  }, [config.expiryOptionsSecs, expiresIn])
 
   // Code points, matching the runes the server counts.
   const chars = React.useMemo(() => countCodePoints(content), [content])

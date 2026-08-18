@@ -22,6 +22,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,16 +55,53 @@ const (
 	// promise of permanence: the storage cap and the operator's own TTLs still
 	// apply, and either can reclaim the paste at any time.
 	NoExpiry = time.Duration(0)
-
-	// MinTTL and MaxTTL bound the lifetime a paste may ask for.
-	//
-	// Below an hour the cleanup interval, not the request, would decide when the
-	// paste actually goes, so the number on the screen would be fiction. Above a
-	// month a lifetime stops being a lifetime and starts being the storage cap's
-	// problem, which already handles it.
-	MinTTL = time.Hour
-	MaxTTL = 30 * 24 * time.Hour
 )
+
+// TTLOptions are the only lifetimes a paste may ask for.
+//
+// A fixed ladder rather than a range, and the API enforces it as strictly as
+// the picker does. A range would accept 4001 seconds and then quietly behave
+// like an hour: the sweep runs hourly, so the difference between neighbouring
+// arbitrary values is not something the server can honour, and an accepted
+// value the server rounds off in practice is worse than a refusal.
+//
+// It starts at an hour because below that the cleanup interval, not the
+// request, decides when the data actually goes. It stops at a month because
+// past that a lifetime stops being a lifetime and becomes the storage cap's
+// problem, which already handles it.
+var TTLOptions = []time.Duration{
+	time.Hour,
+	6 * time.Hour,
+	12 * time.Hour,
+	24 * time.Hour,
+	3 * 24 * time.Hour,
+	7 * 24 * time.Hour,
+	14 * 24 * time.Hour,
+	30 * 24 * time.Hour,
+}
+
+// AllowedTTL reports whether a lifetime is one the server will accept.
+func AllowedTTL(d time.Duration) bool {
+	if d == NoExpiry {
+		return true
+	}
+	return slices.Contains(TTLOptions, d)
+}
+
+// ttlList names the options the way the picker labels them, for the error a
+// rejected request gets back. "24h0m0s" is what a Duration prints as, and it is
+// not what anyone typed.
+var ttlList = func() string {
+	names := make([]string, len(TTLOptions))
+	for i, d := range TTLOptions {
+		if hours := int(d.Hours()); hours%24 == 0 {
+			names[i] = fmt.Sprintf("%dd", hours/24)
+		} else {
+			names[i] = fmt.Sprintf("%dh", hours)
+		}
+	}
+	return strings.Join(names, ", ")
+}()
 
 var (
 	// ErrNotFound means the code was never issued, or its paste is gone.
@@ -73,8 +112,8 @@ var (
 	ErrTooLarge = errors.New("store: paste exceeds character limit")
 	// ErrNoRoom means a single paste could not fit inside the whole byte cap.
 	ErrNoRoom = errors.New("store: paste does not fit within the storage cap")
-	// ErrBadTTL means the requested lifetime was outside [MinTTL, MaxTTL].
-	ErrBadTTL = errors.New("store: requested lifetime is out of range")
+	// ErrBadTTL means the requested lifetime was not one of TTLOptions.
+	ErrBadTTL = errors.New("store: unsupported lifetime")
 	// ErrBusy means too many writes are already queued and this one was shed
 	// rather than added to a line that is no longer worth joining.
 	ErrBusy = errors.New("store: write queue is full")
@@ -311,9 +350,9 @@ func (s *Store) Close() error {
 // Create compresses and stores content, allocating the shortest unused code and
 // evicting least-recently-used pastes if the byte cap needs the room.
 //
-// A ttl of zero records no lifetime; anything else must fall within
-// [MinTTL, MaxTTL] and is written as an absolute instant, so a paste's deadline
-// does not move if the server restarts.
+// A ttl of zero records no lifetime; anything else must be one of TTLOptions
+// and is written as an absolute instant, so a paste's deadline does not move if
+// the server restarts.
 func (s *Store) Create(ctx context.Context, content, language string, ttl time.Duration) (*Paste, error) {
 	chars := utf8.RuneCountInString(content)
 	switch {
@@ -321,8 +360,8 @@ func (s *Store) Create(ctx context.Context, content, language string, ttl time.D
 		return nil, ErrEmpty
 	case chars > s.opts.MaxChars:
 		return nil, fmt.Errorf("%w: %d > %d", ErrTooLarge, chars, s.opts.MaxChars)
-	case ttl != 0 && (ttl < MinTTL || ttl > MaxTTL):
-		return nil, fmt.Errorf("%w: %s not in [%s, %s]", ErrBadTTL, ttl, MinTTL, MaxTTL)
+	case !AllowedTTL(ttl):
+		return nil, fmt.Errorf("%w: must be 0 or one of %s", ErrBadTTL, ttlList)
 	}
 
 	// Admission is taken before compressing, because compression is the

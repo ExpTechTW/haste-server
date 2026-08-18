@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  EXPIRY_OPTIONS,
   NO_EXPIRY,
-  availableExpiries,
   expiryOption,
+  expiryOptions,
   formatRemaining,
   formatRemainingShort,
   remainingParts,
@@ -54,35 +53,47 @@ describe("remainingParts", () => {
 })
 
 describe("the ladder", () => {
-  it("offers only rungs the server will accept", () => {
-    const narrow = availableExpiries(6 * 3600, 7 * 86400)
-    expect(narrow.map((o) => o.label)).toEqual([
+  // What /api/config publishes today. The picker is built from whatever the
+  // server sends, so these are inputs to the test rather than constants.
+  const SERVER = [3600, 21600, 43200, 86400, 259200, 604800, 1209600, 2592000]
+
+  it("names each rung the way a person would", () => {
+    expect(expiryOptions(SERVER).map((o) => o.label)).toEqual([
       "No expiry",
+      "1 hour",
       "6 hours",
       "12 hours",
       "1 day",
       "3 days",
       "7 days",
+      "14 days",
+      "30 days",
+    ])
+    expect(expiryOptions(SERVER).map((o) => o.short)).toEqual([
+      "∞", "1h", "6h", "12h", "1d", "3d", "7d", "14d", "30d",
     ])
   })
 
-  it("keeps no-expiry available whatever the bounds are", () => {
-    // It is not a duration, so a range that excludes every rung must not also
-    // remove the one choice that always applies.
-    expect(availableExpiries(0, 0).map((o) => o.seconds)).toEqual([NO_EXPIRY])
+  it("offers exactly what the server sent, plus no-expiry", () => {
+    const narrow = expiryOptions([21600, 604800])
+    expect(narrow.map((o) => o.seconds)).toEqual([NO_EXPIRY, 21600, 604800])
+    // Not a duration, so a server offering no rungs must still offer this one.
+    expect(expiryOptions([]).map((o) => o.seconds)).toEqual([NO_EXPIRY])
   })
 
-  it("climbs, and starts at the server's own minimum", () => {
-    const durations = EXPIRY_OPTIONS.filter((o) => o.seconds !== NO_EXPIRY)
-    expect(durations[0].seconds).toBe(3600)
-    expect(durations.at(-1)!.seconds).toBe(30 * 86400)
-    for (let i = 1; i < durations.length; i++) {
-      expect(durations[i].seconds).toBeGreaterThan(durations[i - 1].seconds)
-    }
+  it("falls back to hours and minutes for a span that is not whole days", () => {
+    expect(expiryOptions([90 * 60, 2 * 3600]).map((o) => o.label)).toEqual([
+      "No expiry",
+      "90 minutes",
+      "2 hours",
+    ])
   })
 
-  it("falls back to no-expiry for a value that is not on the ladder", () => {
-    expect(expiryOption(12345).seconds).toBe(NO_EXPIRY)
-    expect(expiryOption(6 * 3600).label).toBe("6 hours")
+  // A value off the ladder is one the API would reject, so the picker must not
+  // present it as a live selection.
+  it("falls back to no-expiry for a value the server does not offer", () => {
+    expect(expiryOption(12345, SERVER).seconds).toBe(NO_EXPIRY)
+    expect(expiryOption(21600, SERVER).label).toBe("6 hours")
+    expect(expiryOption(NO_EXPIRY, SERVER).label).toBe("No expiry")
   })
 })

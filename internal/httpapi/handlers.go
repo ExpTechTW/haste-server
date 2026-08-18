@@ -56,20 +56,42 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// expiryOptionsSecs is the lifetime ladder as the API publishes it. Built once,
+// because it never changes and /api/config is on the first-paint path.
+var expiryOptionsSecs = func() []int64 {
+	out := make([]int64, len(store.TTLOptions))
+	for i, d := range store.TTLOptions {
+		out[i] = int64(d.Seconds())
+	}
+	return out
+}()
+
+// badExpiryMessage is what a rejected lifetime gets told. It names the accepted
+// values outright rather than describing a rule, because the field takes
+// seconds and the list is short enough to just print.
+var badExpiryMessage = func() string {
+	secs := make([]string, len(expiryOptionsSecs))
+	for i, n := range expiryOptionsSecs {
+		secs[i] = strconv.FormatInt(n, 10)
+	}
+	return "expiresIn must be 0 (no expiry) or one of " + strings.Join(secs, ", ") +
+		" seconds; the query string also accepts these as durations, e.g. 6h or 30d"
+}()
+
 // handleConfig lets the frontend enforce the same limits the server does,
 // instead of hard-coding a copy that can drift.
 //
-// The retention numbers published here are only the bounds of a lifetime a
-// paste may ask for, plus how often cleanup runs. No default retention is
-// published, because a paste that asks for nothing gets no promise: the storage
-// cap can reclaim it whenever it needs the bytes.
+// The lifetime ladder is published rather than described, so the picker is
+// built from the same list Create validates against and the two cannot disagree
+// about what is on offer. No default retention is published, because a paste
+// that asks for nothing gets no promise: the storage cap can reclaim it
+// whenever it needs the bytes.
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	writeJSON(w, http.StatusOK, map[string]any{
-		"maxChars":         s.cfg.MaxChars,
-		"minExpirySecs":    int64(store.MinTTL.Seconds()),
-		"maxExpirySecs":    int64(store.MaxTTL.Seconds()),
-		"cleanupEverySecs": int64(s.cfg.CleanupInterval.Seconds()),
+		"maxChars":          s.cfg.MaxChars,
+		"expiryOptionsSecs": expiryOptionsSecs,
+		"cleanupEverySecs":  int64(s.cfg.CleanupInterval.Seconds()),
 	})
 }
 
@@ -171,8 +193,15 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) (*store.Paste, s
 	return p, req.Content, true
 }
 
-// parseExpiresIn reads a lifetime written either as a plain count of seconds or
-// as a Go duration. Empty means none was asked for.
+// daysRe matches the one duration unit Go does not have.
+//
+// The picker calls the longer rungs "7 days" and "30 days", so 7d and 30d are
+// what someone reaches for at a shell prompt — and time.ParseDuration rejects
+// both, having no unit above the hour.
+var daysRe = regexp.MustCompile(`^(\d{1,4})d$`)
+
+// parseExpiresIn reads a lifetime written as a plain count of seconds, as a Go
+// duration, or in days. Empty means none was asked for.
 func parseExpiresIn(v string) (time.Duration, error) {
 	if v == "" {
 		return 0, nil
@@ -180,9 +209,16 @@ func parseExpiresIn(v string) (time.Duration, error) {
 	if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
 		return time.Duration(secs) * time.Second, nil
 	}
+	if m := daysRe.FindStringSubmatch(v); m != nil {
+		days, err := strconv.Atoi(m[1])
+		if err != nil {
+			return 0, errors.New(badExpiryMessage)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return 0, errors.New("expiresIn must be a number of seconds or a duration such as 1h")
+		return 0, errors.New(badExpiryMessage)
 	}
 	return d, nil
 }
@@ -303,7 +339,7 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrEmpty):
 		writeError(w, http.StatusBadRequest, "empty", "paste is empty")
 	case errors.Is(err, store.ErrBadTTL):
-		writeError(w, http.StatusBadRequest, "bad_expiry", err.Error())
+		writeError(w, http.StatusBadRequest, "bad_expiry", badExpiryMessage)
 	case errors.Is(err, store.ErrTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "too_large", err.Error())
 	case errors.Is(err, store.ErrBusy):

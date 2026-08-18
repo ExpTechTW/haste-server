@@ -617,24 +617,50 @@ func TestNoLifetimeLeavesTheColumnNull(t *testing.T) {
 	}
 }
 
-func TestCreateRejectsLifetimesOutOfRange(t *testing.T) {
+// The ladder is the contract, not a range: a value between two rungs is
+// refused rather than quietly behaving like the one below it.
+func TestCreateAcceptsOnlyTheLadder(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
 	for _, ttl := range []time.Duration{
 		time.Second,
-		MinTTL - time.Second,
-		MaxTTL + time.Second,
+		time.Hour - time.Second,
+		time.Hour + time.Second,       // just off the first rung
+		2 * time.Hour,                 // between rungs, and a plausible ask
+		9 * time.Hour,                 // between rungs
+		31 * 24 * time.Hour,           // past the last one
+		30*24*time.Hour - time.Second, // just short of it
 		-time.Hour,
 	} {
 		if _, err := st.Create(ctx, "content", "", ttl); !errors.Is(err, ErrBadTTL) {
 			t.Errorf("Create with ttl %s: err = %v, want ErrBadTTL", ttl, err)
 		}
 	}
-	for _, ttl := range []time.Duration{NoExpiry, MinTTL, MaxTTL} {
+
+	for _, ttl := range append([]time.Duration{NoExpiry}, TTLOptions...) {
 		if _, err := st.Create(ctx, "content", "", ttl); err != nil {
 			t.Errorf("Create with ttl %s: %v", ttl, err)
 		}
+	}
+}
+
+func TestTTLOptionsAreOrderedAndNamed(t *testing.T) {
+	for i, d := range TTLOptions {
+		if d <= 0 {
+			t.Errorf("TTLOptions[%d] = %s, want a positive duration", i, d)
+		}
+		if i > 0 && d <= TTLOptions[i-1] {
+			t.Errorf("TTLOptions[%d] = %s is not above %s", i, d, TTLOptions[i-1])
+		}
+	}
+	// The rejection message quotes this, so it has to read like the picker's
+	// labels rather than like a Duration ("24h0m0s").
+	if want := "1h, 6h, 12h, 1d, 3d, 7d, 14d, 30d"; ttlList != want {
+		t.Errorf("ttlList = %q, want %q", ttlList, want)
+	}
+	if !AllowedTTL(NoExpiry) {
+		t.Error("NoExpiry is not allowed")
 	}
 }
 
@@ -644,7 +670,7 @@ func TestExpiredPasteStopsBeingServedBeforeTheSweep(t *testing.T) {
 	st := newTestStore(t, nil)
 	ctx := context.Background()
 
-	live, err := st.Create(ctx, "still here", "", MinTTL)
+	live, err := st.Create(ctx, "still here", "", TTLOptions[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -793,7 +819,7 @@ func TestOpensADatabaseWrittenBeforeExpiries(t *testing.T) {
 	}
 
 	// The new column works for writes...
-	fresh, err := st.Create(ctx, "temporary", "", MinTTL)
+	fresh, err := st.Create(ctx, "temporary", "", TTLOptions[0])
 	if err != nil {
 		t.Fatalf("Create with a lifetime after migrating: %v", err)
 	}
